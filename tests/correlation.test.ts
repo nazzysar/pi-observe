@@ -116,6 +116,8 @@ test("assembleRequestRecord is the canonical shape", () => {
     prompt: undefined,
     logicalContext: [{ role: "user", content: "hi" }],
     sanitizedProviderPayload: { messages: [] },
+    providerEnvelope: undefined,
+    providerTools: undefined,
     contextUsage: { tokens: 3, contextWindow: 100, percent: 3 },
     warnings: [],
   });
@@ -152,6 +154,8 @@ test("assembleRequestRecord stores sanitized payload verbatim", () => {
     prompt: undefined,
     logicalContext: undefined,
     sanitizedProviderPayload: sanitized,
+    providerEnvelope: undefined,
+    providerTools: undefined,
     contextUsage: undefined,
     warnings: [],
   });

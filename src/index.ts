@@ -4,11 +4,14 @@
  * Passive observability only: no tools, no prompt text, no message
  * injection, no payload replacement. Load this extension last so the
  * payload it observes is the payload Pi actually sends (see README).
+ *
+ * P0.3 — adds the local /inspect command (UI only; no LLM interaction).
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installObserver } from "./recorder.ts";
 import { SessionStore } from "./store.ts";
+import { registerInspectCommand } from "./ui/inspect.ts";
 
 const DEFAULT_MAX_REQUESTS = 100;
 
@@ -22,4 +25,7 @@ function readMaxRequests(): number {
 export default function (pi: ExtensionAPI): void {
   const store = new SessionStore({ maxRequests: readMaxRequests() });
   installObserver(pi, { store });
+  // P0.3: local request inspector. Registers no tools, sends no messages,
+  // and only ever reads store state when the user invokes /inspect.
+  registerInspectCommand(pi, store);
 }

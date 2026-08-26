@@ -20,21 +20,32 @@ import {
   missingContextWarning,
 } from "./correlation.ts";
 import type {
+  ExtractedToolDefinition,
   ObservationWarning,
   ObservationWarningCode,
   PendingContextSnapshot,
   PromptSnapshot,
+  ProviderEnvelopeSummary,
   RequestRecord,
   SessionObservationState,
   ThinkingLevel,
 } from "./model.ts";
-import { sanitizeProviderPayload } from "./sanitize.ts";
+import { interpretProviderPayload } from "./provider-envelope.ts";
+import type { ProviderInterpretation } from "./provider-envelope.ts";
+import { SANITIZE_FAILED, sanitizeProviderPayload } from "./sanitize.ts";
 
 export interface SessionStoreOptions {
   /** Max retained request records; oldest are evicted. Default 100. */
   maxRequests?: number;
   /** Max retained observation warnings. Default maxRequests * 2. */
   maxWarnings?: number;
+  /**
+   * P0.2 interpreter hook (defaults to `interpretProviderPayload`).
+   * Injectable for tests; a throwing interpreter must never prevent
+   * request recording — the store appends `provider-envelope-parse-failed`
+   * and keeps the raw record.
+   */
+  interpretPayload?: (payload: unknown) => ProviderInterpretation;
 }
 
 export interface BeforeAgentStartInput {
@@ -69,10 +80,12 @@ export class SessionStore {
   private warnings: ObservationWarning[] = [];
   private readonly maxRequests: number;
   private readonly maxWarnings: number;
+  private readonly interpretPayload: (payload: unknown) => ProviderInterpretation;
 
   constructor(options: SessionStoreOptions = {}) {
     this.maxRequests = Math.max(1, Math.floor(options.maxRequests ?? 100));
     this.maxWarnings = Math.max(1, Math.floor(options.maxWarnings ?? this.maxRequests * 2));
+    this.interpretPayload = options.interpretPayload ?? interpretProviderPayload;
   }
 
   // ------------------------------------------------------------------
@@ -149,7 +162,9 @@ export class SessionStore {
       const snapshot = safeSnapshotResult(input.payload, warn);
       sanitizedPayload = sanitizeProviderPayload(snapshot.value);
     } catch (error) {
-      // sanitize/snapshot should never throw; fail open with raw payload.
+      // sanitize/snapshot should never throw; fail open with a safe
+      // placeholder — never the raw payload (credentials would leak and
+      // later mutation of Pi's event objects could change the record).
       const warning: ObservationWarning = {
         code: "sanitize-failed",
         message: error instanceof Error ? error.message : String(error),
@@ -157,7 +172,26 @@ export class SessionStore {
       };
       recordWarnings.push(warning);
       this.appendWarning(warning);
-      sanitizedPayload = input.payload;
+      sanitizedPayload = SANITIZE_FAILED;
+    }
+
+    // P0.2: interpret the sanitized snapshot. Interpretation is a
+    // convenience projection, never a prerequisite for capture — a
+    // throwing interpreter only adds a warning and the record survives.
+    let providerEnvelope: ProviderEnvelopeSummary | undefined;
+    let providerTools: ExtractedToolDefinition[] | undefined;
+    try {
+      const interpretation = this.interpretPayload(sanitizedPayload);
+      providerEnvelope = interpretation.summary;
+      providerTools = interpretation.tools;
+    } catch (error) {
+      const warning: ObservationWarning = {
+        code: "provider-envelope-parse-failed",
+        message: error instanceof Error ? error.message : String(error),
+        timestamp,
+      };
+      recordWarnings.push(warning);
+      this.appendWarning(warning);
     }
 
     const pending = this.pendingContext;
@@ -178,6 +212,8 @@ export class SessionStore {
       prompt: this.currentPrompt,
       logicalContext: pending?.messages,
       sanitizedProviderPayload: sanitizedPayload,
+      providerEnvelope,
+      providerTools,
       contextUsage: input.contextUsage ?? pending?.contextUsage,
       warnings: recordWarnings,
     });
@@ -186,10 +222,11 @@ export class SessionStore {
     this.enforceRetention();
   }
 
-  /** agent_end / agent_settled: mark the run inactive. */
+  /** agent_end / agent_settled: mark the run inactive and drop stale pending context. */
   onRunEnd(): void {
     this.currentRunId = undefined;
     this.currentTurnIndex = undefined;
+    this.pendingContext = undefined;
   }
 
   /** Full reset (session switch/new session). Counters restart. */

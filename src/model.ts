@@ -68,11 +68,37 @@ export interface PendingContextSnapshot {
   timestamp: number;
 }
 
-/** Reserved for P0.2 provider-shape interpretation. */
+/** Best-effort family label for a provider payload (P0.2). */
+export type ProviderShape =
+  | "openai-like"
+  | "anthropic-like"
+  | "google-like"
+  | "unknown";
+
+/**
+ * P0.2 — Provider-neutral projection of the sanitized provider payload.
+ * The raw payload remains authoritative; this is a convenience projection
+ * and is never used to reject or alter capture.
+ */
 export interface ProviderEnvelopeSummary {
-  provider?: string;
+  detectedShape: ProviderShape;
   model?: string;
-  [key: string]: unknown;
+  messageCount?: number;
+  toolCount?: number;
+  systemPresent?: boolean;
+}
+
+/**
+ * P0.2 — Best-effort tool definition extracted from a known provider
+ * location in the sanitized payload. `raw` preserves the provider's own
+ * schema untouched; name/description are filled only when safely readable.
+ */
+export interface ExtractedToolDefinition {
+  /** Position in the provider's tool list (flattened for google-like). */
+  index: number;
+  name?: string;
+  description?: string;
+  raw: unknown;
 }
 
 /** One observed `before_provider_request`. Primary inspector unit. */
@@ -88,6 +114,7 @@ export interface RequestRecord {
   logicalContext: unknown[] | undefined;
   sanitizedProviderPayload: unknown;
   providerEnvelope: ProviderEnvelopeSummary | undefined;
+  providerTools: ExtractedToolDefinition[] | undefined;
   contextUsage: ContextUsageSnapshot | undefined;
   warnings: ObservationWarning[];
 }
@@ -103,7 +130,8 @@ export type ObservationWarningCode =
   | "clone-incomplete"
   | "clone-failed"
   | "missing-logical-context"
-  | "sanitize-failed";
+  | "sanitize-failed"
+  | "provider-envelope-parse-failed";
 
 /** Full in-memory observation state for the current Pi session. */
 export interface SessionObservationState {

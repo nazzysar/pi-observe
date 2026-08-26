@@ -7,10 +7,12 @@
 
 import type {
   ContextUsageSnapshot,
+  ExtractedToolDefinition,
   ModelIdentity,
   ObservationWarning,
   PendingContextSnapshot,
   PromptSnapshot,
+  ProviderEnvelopeSummary,
   RequestRecord,
   SystemPromptOptionsSnapshot,
   ThinkingLevel,
@@ -108,6 +110,10 @@ export interface AssembleRequestRecordInput {
   /** Consumed pending context (undefined when none was pending). */
   logicalContext: unknown[] | undefined;
   sanitizedProviderPayload: unknown;
+  /** P0.2 projection of the sanitized payload (undefined on parse failure). */
+  providerEnvelope: ProviderEnvelopeSummary | undefined;
+  /** P0.2 tool extraction (undefined when schema uninterpretable). */
+  providerTools: ExtractedToolDefinition[] | undefined;
   contextUsage: unknown;
   warnings: ObservationWarning[];
 }
@@ -127,7 +133,8 @@ export function assembleRequestRecord(
     prompt: input.prompt,
     logicalContext: input.logicalContext,
     sanitizedProviderPayload: input.sanitizedProviderPayload,
-    providerEnvelope: undefined,
+    providerEnvelope: input.providerEnvelope,
+    providerTools: input.providerTools,
     contextUsage: buildContextUsageSnapshot(input.contextUsage),
     warnings: input.warnings,
   };

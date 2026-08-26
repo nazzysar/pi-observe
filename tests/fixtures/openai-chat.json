@@ -1,0 +1,34 @@
+{
+  "model": "gpt-4o",
+  "messages": [
+    { "role": "system", "content": "You are pi. Tools: read, bash." },
+    { "role": "user", "content": "hello" },
+    { "role": "assistant", "content": "hi" }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a file from disk",
+        "parameters": {
+          "type": "object",
+          "properties": { "path": { "type": "string" } },
+          "required": ["path"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "bash",
+        "parameters": {
+          "type": "object",
+          "properties": { "command": { "type": "string" } }
+        }
+      }
+    }
+  ],
+  "max_tokens": 1024,
+  "temperature": 0.2
+}

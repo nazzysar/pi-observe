@@ -16,6 +16,14 @@
 
 export const REDACTED = "[REDACTED]";
 
+/**
+ * Placeholder stored when sanitization itself fails (e.g. a payload deep
+ * enough to overflow the recursive walker). Never the raw payload.
+ */
+export const SANITIZE_FAILED: Readonly<{ $sanitizeFailed: true }> = {
+  $sanitizeFailed: true,
+};
+
 /** Always-redact key patterns (word-bounded so "author" ≠ "authorization"). */
 const ALWAYS_PATTERNS: RegExp[] = [
   /^authorization$/i,

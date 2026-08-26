@@ -1,0 +1,22 @@
+{
+  "model": "gpt-5",
+  "instructions": "You are a helpful assistant.",
+  "input": [
+    {
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "list files" }]
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "list_dir",
+      "description": "List directory contents",
+      "parameters": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } }
+      }
+    }
+  ],
+  "store": false
+}

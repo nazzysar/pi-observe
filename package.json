@@ -1,18 +1,19 @@
 {
   "name": "pi-observe",
-  "version": "0.1.0",
-  "description": "Passive, fail-open in-memory observation layer for Pi coding-agent (P0.1 Observation Core)",
+  "version": "0.3.0",
+  "description": "Passive, fail-open in-memory observation layer for Pi coding-agent (P0.1 Observation Core + P0.2 Provider Payload Interpretation + P0.3 Request Inspector TUI)",
   "type": "module",
   "private": true,
   "pi": {
     "extensions": ["./src/index.ts"]
   },
   "scripts": {
-    "test": "node --test \"tests/*.test.ts\"",
+    "test": "node --test \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
   }
