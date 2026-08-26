@@ -73,6 +73,7 @@ export type ProviderShape =
   | "openai-like"
   | "anthropic-like"
   | "google-like"
+  | "bedrock-like"
   | "unknown";
 
 /**
@@ -141,7 +142,12 @@ export interface SessionObservationState {
   maxRequests: number;
   currentRunId: string | undefined;
   currentTurnIndex: number | undefined;
-  maxTurnIndex: number | undefined;
+  /**
+   * Actual turns started this session (one per `turn_start`). Pi's
+   * per-run `turnIndex` is zero-based and resets on every agent run,
+   * so it cannot be used as a session-level count.
+   */
+  turnCount: number | undefined;
   currentPrompt: PromptSnapshot | undefined;
   pendingContext: PendingContextSnapshot | undefined;
   requests: RequestRecord[];

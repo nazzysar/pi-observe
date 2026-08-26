@@ -94,10 +94,26 @@ test("empty content renders the empty state without crashing", () => {
   assert.ok(lines.some((l) => l.includes("(nothing here)")));
 });
 
-test("long lines are truncated to the terminal width", () => {
+test("long lines wrap to the terminal width", () => {
   const { viewer: vw } = makeViewer(["x".repeat(500)], 40);
   const lines = vw.render(60);
   assert.ok(visibleWidth(lines[1]!) <= 60);
+});
+
+test("long lines wrap so the tail stays reachable by scrolling", () => {
+  // 3000 chars at 60 cols wraps to ~51 lines — far more than the
+  // 34-row window, so truncation would permanently hide the tail.
+  const { viewer: vw } = makeViewer([`head-marker-${"x".repeat(3000)}-TAIL42`], 40);
+  const head = vw.render(60).join("\n");
+  assert.ok(head.includes("head-marker-"), "head of the long line visible");
+  assert.ok(!head.includes("TAIL42"), "tail wrapped out of view initially");
+  for (const line of vw.render(60)) {
+    assert.ok(visibleWidth(line) <= 60, `wrapped line exceeds width: ${line}`);
+  }
+  vw.handleInput("\u001b[F"); // end
+  const tail = vw.render(60).join("\n");
+  assert.ok(vw.scrollOffset > 0, "scrolled past the wrapped head");
+  assert.ok(tail.includes("TAIL42"), "tail reachable after End");
 });
 
 test("small terminal shrinks the window but scrolling still works", () => {
@@ -115,4 +131,26 @@ test("setLines replaces content and clamps offset", () => {
   instance.setLines(["only"]);
   assert.equal(instance.scrollOffset, 0);
   assert.equal(instance.lineCount, 1);
+});
+
+test("height-only terminal resize recomputes the cached view", () => {
+  const { viewer: vw, tui } = makeViewer(LINES, 40); // 34 content rows
+  assert.equal(vw.render(80).length, 36);
+
+  // Resize only the terminal height; the same width must not hit the cache.
+  tui.terminal.rows = 20; // 14 content rows
+  const short = vw.render(80);
+  assert.equal(short.length, 16, "fewer content rows after shrink");
+  assert.ok(short.some((l) => l.includes("1-14/100")), "footer shows the new window");
+});
+
+test("height growth re-renders and re-clamps the scroll offset", () => {
+  const { viewer: vw, tui } = makeViewer(LINES, 20); // 14 content rows
+  vw.handleInput("\u001b[F"); // end → offset 86 (100 - 14)
+  assert.equal(vw.scrollOffset, 86);
+  tui.terminal.rows = 40; // 34 content rows → max offset 66
+  const grown = vw.render(80);
+  assert.equal(grown.length, 36);
+  assert.equal(vw.scrollOffset, 66, "offset re-clamped for the taller window");
+  assert.equal(grown[1]!, "line 66");
 });

@@ -54,7 +54,7 @@ test("full lifecycle: one run, one turn, one context, one request", () => {
   assert.equal(state.runCount, 1);
   assert.equal(state.requestCount, 1);
   assert.equal(state.currentRunId, undefined); // run inactive after end
-  assert.equal(state.maxTurnIndex, 0);
+  assert.equal(state.turnCount, 1); // one turn_start, even though index is 0
 
   const [record] = state.requests;
   assert.equal(record.requestId, "req-1");
@@ -108,7 +108,7 @@ test("multiple turns and requests correlate per run", () => {
   const state = store.getState();
   assert.equal(state.runCount, 1);
   assert.equal(state.requestCount, 3);
-  assert.equal(state.maxTurnIndex, 2);
+  assert.equal(state.turnCount, 3); // turns 0, 1, 2
 
   const [r1, r2, r3] = store.getRequests();
   assert.deepEqual(
@@ -170,6 +170,31 @@ test("repeated context: latest wins; consumed after request", () => {
   assert.deepEqual(r1.warnings, []);
 });
 
+test("turn count accumulates across runs despite resetting indices", () => {
+  const { store, recorder } = makeRecorder();
+  const ctx = fakeCtx({ model: fakeModel() });
+
+  // Run one: turns 0-2 (3 turns).
+  recorder.beforeAgentStart(beforeAgentStartEvent(), ctx);
+  recorder.agentStart(agentStartEvent(), ctx);
+  for (let i = 0; i < 3; i += 1) {
+    recorder.turnStart(turnStartEvent(i), ctx);
+  }
+  recorder.agentEnd(agentEndEvent(), ctx);
+
+  // Run two: Pi's turn index resets to 0; turns 0-1 (2 more turns).
+  recorder.beforeAgentStart(beforeAgentStartEvent(), ctx);
+  recorder.agentStart(agentStartEvent(), ctx);
+  for (let i = 0; i < 2; i += 1) {
+    recorder.turnStart(turnStartEvent(i), ctx);
+  }
+  recorder.agentEnd(agentEndEvent(), ctx);
+
+  const state = store.getState();
+  assert.equal(state.runCount, 2);
+  assert.equal(state.turnCount, 5); // 3 + 2, not the max per-run index (2)
+});
+
 test("turn without request produces no record", () => {
   const { store, recorder } = makeRecorder();
   const ctx = fakeCtx({ model: fakeModel() });
@@ -186,7 +211,7 @@ test("turn without request produces no record", () => {
   assert.equal(state.runCount, 1);
   assert.equal(state.requestCount, 0);
   assert.equal(state.requests.length, 0);
-  assert.equal(state.maxTurnIndex, 0);
+  assert.equal(state.turnCount, 1); // the turn itself still counts
 });
 
 test("session reset clears state; counters restart", () => {
@@ -206,7 +231,7 @@ test("session reset clears state; counters restart", () => {
   assert.equal(empty.requestCount, 0);
   assert.equal(empty.requests.length, 0);
   assert.equal(empty.currentRunId, undefined);
-  assert.equal(empty.maxTurnIndex, undefined);
+  assert.equal(empty.turnCount, undefined);
 
   recorder.beforeAgentStart(beforeAgentStartEvent(), ctx);
   recorder.agentStart(agentStartEvent(), ctx);
@@ -323,7 +348,7 @@ test("deterministic mocked lifecycle: before_agent_start through agent_settled",
   const state = store.getState();
   assert.equal(state.runCount, 1);
   assert.equal(state.requestCount, 1);
-  assert.equal(state.maxTurnIndex, 0);
+  assert.equal(state.turnCount, 1);
   assert.equal(state.currentRunId, undefined);
   assert.equal(state.currentTurnIndex, undefined);
 

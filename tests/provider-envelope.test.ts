@@ -338,6 +338,134 @@ test("google SDK payload: malformed config.tools is uninterpretable", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Fixtures: bedrock-like
+// ---------------------------------------------------------------------------
+
+test("bedrock fixture: shape, modelId, counts, system", () => {
+  const fixture = loadFixture("bedrock-like.json") as Record<string, unknown>;
+  const summary = summarizeProviderPayload(fixture);
+  assert.deepEqual(summary, {
+    detectedShape: "bedrock-like",
+    model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messageCount: 2,
+    toolCount: 2,
+    systemPresent: true,
+  });
+});
+
+test("bedrock fixture: top-level system+messages is not misread as anthropic", () => {
+  // Regression: the anthropic heuristic (top-level `system` + `messages`)
+  // must not fire for Bedrock Converse payloads.
+  const fixture = loadFixture("bedrock-like.json") as Record<string, unknown>;
+  assert.equal(fixture.system !== undefined, true);
+  assert.equal(Array.isArray(fixture.messages), true);
+  assert.equal(summarizeProviderPayload(fixture).detectedShape, "bedrock-like");
+});
+
+test("bedrock fixture: tool extraction reads toolSpec, preserves raw", () => {
+  const fixture = loadFixture("bedrock-like.json") as Record<string, unknown>;
+  const tools = extractProviderTools(fixture);
+  assert.equal(tools?.length, 2);
+  assert.equal(tools?.[0]?.index, 0);
+  assert.equal(tools?.[0]?.name, "read_file");
+  assert.equal(tools?.[0]?.description, "Read a file from disk");
+  // Provider-specific schema preserved verbatim, toolSpec wrapper intact.
+  assert.deepEqual(tools?.[0]?.raw, {
+    toolSpec: {
+      name: "read_file",
+      description: "Read a file from disk",
+      inputSchema: {
+        json: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    },
+  });
+  // Second tool has no description: omitted, not fabricated.
+  assert.equal(tools?.[1]?.index, 1);
+  assert.equal(tools?.[1]?.name, "bash");
+  assert.equal(tools?.[1]?.description, undefined);
+});
+
+test("bedrock without system: systemPresent false", () => {
+  const summary = summarizeProviderPayload({
+    modelId: "amazon.nova-pro-v1:0",
+    messages: [{ role: "user", content: [{ text: "hi" }] }],
+  });
+  assert.equal(summary.detectedShape, "bedrock-like");
+  assert.equal(summary.model, "amazon.nova-pro-v1:0");
+  assert.equal(summary.messageCount, 1);
+  assert.equal(summary.systemPresent, false);
+  assert.equal(summary.toolCount, undefined);
+});
+
+test("bedrock with explicit toolConfig undefined: no tools, shape still detected", () => {
+  // Pi's adapter emits `toolConfig: undefined` when no tools are
+  // configured; the own property survives structuredClone, so shape
+  // detection must still see Bedrock and extraction must say "no tools".
+  const payload = {
+    modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messages: [{ role: "user", content: [{ text: "hi" }] }],
+    system: [{ text: "You are pi." }],
+    inferenceConfig: {},
+    toolConfig: undefined,
+  };
+  const summary = summarizeProviderPayload(payload);
+  assert.equal(summary.detectedShape, "bedrock-like");
+  assert.equal(summary.toolCount, undefined);
+  assert.deepEqual(extractProviderTools(payload), []);
+});
+
+test("bedrock absent toolConfig: extraction says no tools", () => {
+  const payload = { modelId: "m", messages: [] };
+  assert.equal(summarizeProviderPayload(payload).detectedShape, "bedrock-like");
+  assert.deepEqual(extractProviderTools(payload), []);
+});
+
+test("bedrock detected via inferenceConfig alone", () => {
+  const summary = summarizeProviderPayload({ inferenceConfig: { maxTokens: 100 } });
+  assert.equal(summary.detectedShape, "bedrock-like");
+});
+
+test("bedrock malformed toolConfig is uninterpretable, never fabricated", () => {
+  assert.equal(
+    extractProviderTools({ modelId: "m", messages: [], toolConfig: { tools: {} } }),
+    undefined,
+  );
+  assert.equal(
+    extractProviderTools({ modelId: "m", messages: [], toolConfig: 42 }),
+    undefined,
+  );
+  // toolConfig present without a tools key: understood, no tools.
+  assert.deepEqual(
+    extractProviderTools({ modelId: "m", messages: [], toolConfig: {} }),
+    [],
+  );
+  const summary = summarizeProviderPayload({
+    modelId: "m",
+    messages: [],
+    toolConfig: { tools: {} },
+  });
+  assert.equal(summary.detectedShape, "bedrock-like");
+  assert.equal(summary.toolCount, undefined);
+});
+
+test("bedrock non-object tool entries are skipped, indices kept", () => {
+  const tools = extractProviderTools({
+    modelId: "m",
+    messages: [],
+    toolConfig: {
+      tools: [null, { toolSpec: { name: "a" } }, "junk"],
+    },
+  });
+  assert.equal(tools?.length, 1);
+  assert.equal(tools?.[0]?.index, 1);
+  assert.equal(tools?.[0]?.name, "a");
+});
+
 test("google SDK string systemInstruction counts as present", () => {
   // Pi's adapter supplies the system prompt as a plain string.
   const summary = summarizeProviderPayload({

@@ -5,13 +5,23 @@
  * renders a block of pre-split text lines with an internal scroll
  * window. Used for the SYSTEM prompt, RAW payload, and detail sections.
  *
+ * Long lines are wrapped (ANSI-aware) at the terminal width instead of
+ * truncated, so full content — system prompts, JSON string values —
+ * stays reachable by scrolling; nothing is permanently hidden.
+ *
  * The component cannot know its exact allocated height, so the visible
  * window is estimated from the terminal height minus a small reserved
  * area for the dock/footer. On short terminals the window shrinks but
  * scrolling keeps every line reachable.
  */
 
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  Key,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
 /** Minimal structural theme: satisfied by pi's Theme class. */
 export interface InspectorTheme {
@@ -58,10 +68,16 @@ export class TextViewer {
   private readonly footer: string | undefined;
   private readonly onClose: (() => void) | undefined;
 
-  /** First visible line index. */
+  /** First visible line index (into the wrapped line sequence). */
   private offset = 0;
   private cachedWidth = -1;
+  /** Content rows at cache time; rendered lines also depend on terminal height. */
+  private cachedRows = -1;
   private cachedLines: string[] | undefined;
+  /** Width of the last render; drives wrapping before first render. */
+  private renderWidth = -1;
+  /** Lines wrapped at a given width (cache; keyed by width). */
+  private wrapCache: { width: number; lines: string[] } | undefined;
 
   constructor(options: TextViewerOptions) {
     this.tui = options.tui;
@@ -76,12 +92,29 @@ export class TextViewer {
 
   setLines(lines: string[]): void {
     this.lines = lines;
+    this.wrapCache = undefined;
     this.clampOffset();
     this.invalidate();
   }
 
   get lineCount(): number {
     return this.lines.length;
+  }
+
+  /**
+   * Content wrapped to the last rendered width (fallback 80 cols before
+   * the first render), so every logical line stays fully inspectable.
+   */
+  private wrappedLines(): string[] {
+    const width = this.renderWidth > 0 ? this.renderWidth : 80;
+    if (this.wrapCache === undefined || this.wrapCache.width !== width) {
+      const wrapped: string[] = [];
+      for (const line of this.lines) {
+        wrapped.push(...wrapTextWithAnsi(line, width));
+      }
+      this.wrapCache = { width, lines: wrapped };
+    }
+    return this.wrapCache.lines;
   }
 
   get scrollOffset(): number {
@@ -97,25 +130,26 @@ export class TextViewer {
   }
 
   private clampOffset(): void {
-    const max = Math.max(0, this.lines.length - this.contentRows());
+    const max = Math.max(0, this.wrappedLines().length - this.contentRows());
     if (this.offset > max) this.offset = max;
     if (this.offset < 0) this.offset = 0;
   }
 
   handleInput(data: string): void {
     const rows = this.contentRows();
+    const total = this.wrappedLines().length;
     if (matchesKey(data, Key.up)) {
       if (this.offset > 0) this.offset -= 1;
     } else if (matchesKey(data, Key.down)) {
-      if (this.offset < this.lines.length - rows) this.offset += 1;
+      if (this.offset < total - rows) this.offset += 1;
     } else if (matchesKey(data, Key.pageUp)) {
       this.offset = Math.max(0, this.offset - rows);
     } else if (matchesKey(data, Key.pageDown)) {
-      this.offset = Math.min(this.lines.length - rows, this.offset + rows);
+      this.offset = Math.min(total - rows, this.offset + rows);
     } else if (matchesKey(data, Key.home)) {
       this.offset = 0;
     } else if (matchesKey(data, Key.end)) {
-      this.offset = Math.max(0, this.lines.length - rows);
+      this.offset = Math.max(0, total - rows);
     } else if (matchesKey(data, Key.escape) || data === "q") {
       this.onClose?.();
       return;
@@ -128,10 +162,15 @@ export class TextViewer {
   }
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
+    if (
+      this.cachedLines &&
+      this.cachedWidth === width &&
+      this.cachedRows === this.contentRows()
+    ) {
       return this.cachedLines;
     }
     const safeWidth = Math.max(1, Math.floor(width));
+    this.renderWidth = safeWidth;
     const theme = this.theme;
     const out: string[] = [];
 
@@ -144,17 +183,18 @@ export class TextViewer {
 
     const rows = this.contentRows();
     this.clampOffset();
-    const visible = this.lines.slice(this.offset, this.offset + rows);
+    // Wrapped lines are already fitted to `safeWidth`; push them as-is so
+    // long lines stay fully inspectable instead of being cut off.
+    const visible = this.wrappedLines().slice(this.offset, this.offset + rows);
     if (visible.length === 0) {
       out.push(theme.fg("dim", this.emptyText));
     } else {
-      for (const line of visible) {
-        out.push(truncateToWidth(line, safeWidth));
-      }
+      out.push(...visible);
     }
 
     out.push(this.footerLine(safeWidth));
     this.cachedWidth = width;
+    this.cachedRows = this.contentRows();
     this.cachedLines = out;
     return out;
   }
@@ -162,7 +202,7 @@ export class TextViewer {
   private footerLine(width: number): string {
     const theme = this.theme;
     const hint = this.footer ?? "↑↓ scroll   esc/q close";
-    const total = this.lines.length;
+    const total = this.wrappedLines().length;
     let scrollInfo = "";
     if (total > this.contentRows()) {
       const end = Math.min(this.offset + this.contentRows(), total);
@@ -175,6 +215,7 @@ export class TextViewer {
 
   invalidate(): void {
     this.cachedWidth = -1;
+    this.cachedRows = -1;
     this.cachedLines = undefined;
   }
 }

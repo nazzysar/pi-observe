@@ -106,6 +106,18 @@ function stringField(
 function detectShape(payload: Record<string, unknown>): ProviderShape {
   // `contents` is the mandatory Gemini generateContent field.
   if (hasOwn(payload, "contents")) return "google-like";
+  // Bedrock Converse: Pi's adapter emits top-level `modelId` + `messages`
+  // + `system` (blocks), with tools under `toolConfig` (never `tools`)
+  // and `inferenceConfig`. Those three field names never appear in the
+  // other families, so any one of them is a Bedrock signature. Must run
+  // before the Anthropic branch — Bedrock also has `system` + `messages`.
+  if (
+    hasOwn(payload, "toolConfig") ||
+    hasOwn(payload, "inferenceConfig") ||
+    (typeof payload.modelId === "string" && Array.isArray(payload.messages))
+  ) {
+    return "bedrock-like";
+  }
   // Anthropic REST requests carry anthropic_version; top-level `system`
   // alongside `messages` is the Anthropic signature (OpenAI never uses
   // a top-level system field); `input_schema` is Anthropic's tool shape.
@@ -148,6 +160,9 @@ function summarize(payload: unknown): ProviderEnvelopeSummary {
       break;
     case "google-like":
       summarizeGoogle(payload, summary);
+      break;
+    case "bedrock-like":
+      summarizeBedrock(payload, summary);
       break;
     case "unknown":
       break;
@@ -200,6 +215,31 @@ function summarizeAnthropic(
   }
   if (Array.isArray(payload.tools)) {
     summary.toolCount = payload.tools.length;
+  }
+}
+
+/**
+ * Bedrock Converse: `modelId` names the model (not `model`), `system`
+ * is a block array, and tools live under `toolConfig.tools`.
+ * `toolConfig` may be an explicit `undefined` (what Pi's adapter emits
+ * when no tools are configured) — that is "no tools", not malformed.
+ */
+function summarizeBedrock(
+  payload: Record<string, unknown>,
+  summary: ProviderEnvelopeSummary,
+): void {
+  if (Array.isArray(payload.messages)) {
+    summary.messageCount = payload.messages.length;
+  }
+  const system = payload.system;
+  summary.systemPresent =
+    typeof system === "string" || Array.isArray(system);
+  const modelId = stringField(payload, "modelId");
+  if (modelId !== undefined) summary.model = modelId;
+  const toolConfig = payload.toolConfig;
+  if (toolConfig === undefined) return; // adapter's explicit "no tools"
+  if (isRecord(toolConfig) && Array.isArray(toolConfig.tools)) {
+    summary.toolCount = toolConfig.tools.length;
   }
 }
 
@@ -309,6 +349,19 @@ function extractTools(
     return extractGoogleTools(googleTools);
   }
 
+  if (shape === "bedrock-like") {
+    const toolConfig = payload.toolConfig;
+    // `toolConfig: undefined` is Pi's adapter saying "no tools"; a
+    // missing toolConfig is Bedrock's optional field — both are "no
+    // tools". A present but malformed toolConfig is uninterpretable.
+    if (toolConfig === undefined) return [];
+    if (!isRecord(toolConfig)) return undefined;
+    if (!hasOwn(toolConfig, "tools")) return [];
+    const bedrockTools = toolConfig.tools;
+    if (!Array.isArray(bedrockTools)) return undefined;
+    return extractBedrockTools(bedrockTools);
+  }
+
   const tools = payload.tools;
   if (!Array.isArray(tools)) {
     // Shape understood: absent tools field means "no tools"; a present
@@ -347,6 +400,28 @@ function extractOpenAiTools(tools: unknown[]): ExtractedToolDefinition[] {
       const name = stringField(entry, "name");
       if (name !== undefined) def.name = name;
       const description = stringField(entry, "description");
+      if (description !== undefined) def.description = description;
+    }
+    out.push(def);
+  });
+  return out;
+}
+
+/**
+ * Bedrock tools: `toolConfig.tools[]` where each entry wraps a spec as
+ * `{ toolSpec: { name, description, inputSchema } }`. The whole entry
+ * is preserved as `raw`; name/description come from `toolSpec`.
+ */
+function extractBedrockTools(tools: unknown[]): ExtractedToolDefinition[] {
+  const out: ExtractedToolDefinition[] = [];
+  tools.forEach((entry, index) => {
+    if (!isRecord(entry)) return; // not a definition; keep index gap
+    const def: ExtractedToolDefinition = { index, raw: entry };
+    const spec = entry.toolSpec;
+    if (isRecord(spec)) {
+      const name = stringField(spec, "name");
+      if (name !== undefined) def.name = name;
+      const description = stringField(spec, "description");
       if (description !== undefined) def.description = description;
     }
     out.push(def);

@@ -44,6 +44,8 @@ export class RequestListComponent {
   private selectedIndex = 0;
   private offset = 0;
   private cachedWidth = -1;
+  /** Content rows at cache time; rendered lines also depend on terminal height. */
+  private cachedRows = -1;
   private cachedLines: string[] | undefined;
 
   constructor(options: RequestListOptions) {
@@ -116,7 +118,11 @@ export class RequestListComponent {
   }
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
+    if (
+      this.cachedLines &&
+      this.cachedWidth === width &&
+      this.cachedRows === this.contentRows()
+    ) {
       return this.cachedLines;
     }
     const safeWidth = Math.max(1, Math.floor(width));
@@ -145,6 +151,7 @@ export class RequestListComponent {
     }
     out.push(this.footerLine(safeWidth, records.length));
     this.cachedWidth = width;
+    this.cachedRows = this.contentRows();
     this.cachedLines = out;
     return out;
   }
@@ -156,7 +163,7 @@ export class RequestListComponent {
     const session = this.sessionId ? `Session: ${this.sessionId}   ` : "";
     return (
       `${session}Runs: ${formatCount(state.runCount)}   ` +
-      `Turns: ${formatCount(state.maxTurnIndex)}   ` +
+      `Turns: ${formatCount(state.turnCount)}   ` +
       `Requests: ${formatCount(state.requestCount)}   ` +
       `Context: ${context}`
     );
@@ -224,11 +231,15 @@ export class RequestListComponent {
         : record.providerEnvelope?.messageCount !== undefined
           ? String(record.providerEnvelope.messageCount)
           : "?";
+    // Prefer the envelope tool count: it is the true count of tools in
+    // the provider payload and includes native tools (Gemini googleSearch,
+    // codeExecution, …) that carry no extractable definition. Extracted
+    // definitions are the fallback, and may undercount native tools.
     const tools =
-      record.providerTools !== undefined
-        ? String(record.providerTools.length)
-        : record.providerEnvelope?.toolCount !== undefined
-          ? String(record.providerEnvelope.toolCount)
+      record.providerEnvelope?.toolCount !== undefined
+        ? String(record.providerEnvelope.toolCount)
+        : record.providerTools !== undefined
+          ? String(record.providerTools.length)
           : "?";
 
     const cells = [
@@ -260,6 +271,7 @@ export class RequestListComponent {
 
   invalidate(): void {
     this.cachedWidth = -1;
+    this.cachedRows = -1;
     this.cachedLines = undefined;
   }
 }

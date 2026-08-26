@@ -169,7 +169,7 @@ function summaryLine(state: SessionObservationState): string {
   const latest = state.requests[state.requests.length - 1];
   return (
     `pi-observe: ${formatCount(state.runCount)} runs, ` +
-    `${formatCount(state.maxTurnIndex)} turns, ` +
+    `${formatCount(state.turnCount)} turns, ` +
     `${formatCount(state.requestCount)} requests ` +
     `(context ${formatContextUsage(latest?.contextUsage)})`
   );
@@ -184,7 +184,7 @@ function setStatus(
   const context = formatContextUsage(latest?.contextUsage);
   const text =
     `obs r${formatCount(state.requestCount)} · ` +
-    `t${formatCount(state.maxTurnIndex)} · ${context}`;
+    `t${formatCount(state.turnCount)} · ${context}`;
   ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", text));
 }
 

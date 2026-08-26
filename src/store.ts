@@ -73,7 +73,7 @@ export class SessionStore {
   private evictedRequestCount = 0;
   private currentRunId: string | undefined;
   private currentTurnIndex: number | undefined;
-  private maxTurnIndex: number | undefined;
+  private turnCount: number | undefined;
   private currentPrompt: PromptSnapshot | undefined;
   private pendingContext: PendingContextSnapshot | undefined;
   private requests: RequestRecord[] = [];
@@ -116,13 +116,13 @@ export class SessionStore {
     this.runCount += 1;
   }
 
-  /** turn_start: track the current turn index. */
+  /** turn_start: track the current turn index and count the turn. */
   onTurnStart(turnIndex: number): void {
     this.currentTurnIndex = turnIndex;
-    this.maxTurnIndex =
-      this.maxTurnIndex === undefined
-        ? turnIndex
-        : Math.max(this.maxTurnIndex, turnIndex);
+    // Pi's turnIndex is zero-based and resets per agent run, so the
+    // session turn count is the number of turn_start events, not the
+    // max index.
+    this.turnCount = (this.turnCount ?? 0) + 1;
   }
 
   /** turn_end: bookkeeping only; the index was already tracked. */
@@ -237,7 +237,7 @@ export class SessionStore {
     this.evictedRequestCount = 0;
     this.currentRunId = undefined;
     this.currentTurnIndex = undefined;
-    this.maxTurnIndex = undefined;
+    this.turnCount = undefined;
     this.currentPrompt = undefined;
     this.pendingContext = undefined;
     this.requests = [];
@@ -257,7 +257,7 @@ export class SessionStore {
       maxRequests: this.maxRequests,
       currentRunId: this.currentRunId,
       currentTurnIndex: this.currentTurnIndex,
-      maxTurnIndex: this.maxTurnIndex,
+      turnCount: this.turnCount,
       currentPrompt: this.currentPrompt,
       pendingContext: this.pendingContext,
       requests: this.requests,

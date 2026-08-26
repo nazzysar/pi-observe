@@ -13,10 +13,11 @@ transformations — every observer hook returns `undefined`, and
 
 ## What local state answers (per P0.1)
 
-- run count (`runCount`), Pi turns (`maxTurnIndex`), actual
-  provider-request count (`requestCount`) — a provider request exists
-  only when `before_provider_request` fires; `turn_start` and `context`
-  never create request records
+- run count (`runCount`), actual turns started (`turnCount` — one per
+  `turn_start`; Pi's zero-based per-run `turnIndex` is never used as a
+  session count), actual provider-request count (`requestCount`) — a
+  provider request exists only when `before_provider_request` fires;
+  `turn_start` and `context` never create request records
 - run/turn correlation per `RequestRecord` (`runId`, `turnIndex`)
 - effective system prompt (`PromptSnapshot.systemPrompt`) and
   `systemPromptOptions`
@@ -48,15 +49,17 @@ projection is never used to reject or alter capture.
   shows *Tool schema could not be interpreted… See RAW*); `[]` means
   schema understood, no tools. Raw definitions preserve the provider's
   own schema (OpenAI `function`/`parameters`, Anthropic `input_schema`,
-  Google `functionDeclarations`); name/description filled only when safe
+  Google `functionDeclarations`, Bedrock `toolSpec`); name/description
+  filled only when safe
 - `interpretProviderPayload(payload)` → both projections in one pass
 
 Heuristics are deliberately conservative and signature-based:
-`contents` → google-like; `anthropic_version`, top-level `system` +
-`messages`, or tools with `input_schema` → anthropic-like; `messages`
-→ openai-like (chat); `input` → openai-like (Responses); otherwise
-unknown. A bare `messages`+`model` body without distinctive signals
-falls back to openai-like rather than guessing.
+`contents` → google-like; `toolConfig` / `inferenceConfig` / string
+`modelId` + `messages` → bedrock-like; `anthropic_version`, top-level
+`system` + `messages`, or tools with `input_schema` → anthropic-like;
+`messages` → openai-like (chat); `input` → openai-like (Responses);
+otherwise unknown. A bare `messages`+`model` body without distinctive
+signals falls back to openai-like rather than guessing.
 
 Provider-adapter realities handled:
 
@@ -71,6 +74,14 @@ Provider-adapter realities handled:
   `systemInstruction` counts as present in any form the SDK accepts
   (string, object, or array); an explicit empty string counts as
   present, matching Anthropic/OpenAI field-presence semantics
+- **Bedrock Converse**: Pi's adapter emits `modelId` + `messages` +
+  `system` (block array) + `inferenceConfig`, with tools under
+  `toolConfig.tools[].toolSpec` — never top-level `tools`. Bedrock is
+  detected *before* the Anthropic heuristic so its `system`+`messages`
+  body is not mislabeled; `model` is read from `modelId`; tool
+  extraction unwraps `toolSpec` while preserving the entry as `raw`.
+  The adapter's explicit `toolConfig: undefined` (no tools configured)
+  counts as "no tools", not an uninterpretable schema
 
 Capture integration (P0.2.7): `before_provider_request` → P0.1 snapshot
 + sanitize → P0.2 summarize/extract from the **sanitized** snapshot →

@@ -29,6 +29,8 @@ export function providerShapeLabel(shape: ProviderShape | undefined): string {
       return "Anthropic-like";
     case "google-like":
       return "Google-like";
+    case "bedrock-like":
+      return "Bedrock-like";
     case "unknown":
       return "Unknown";
     default:
@@ -147,12 +149,13 @@ function messageBody(message: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     const parts: string[] = [];
+    const MAX_BLOCKS = 8;
     for (const block of content) {
+      if (parts.length >= MAX_BLOCKS) break;
       parts.push(blockSummary(block));
-      if (parts.length >= 8) {
-        parts.push(`+${content.length - parts.length} more`);
-        break;
-      }
+    }
+    if (content.length > parts.length) {
+      parts.push(`+${content.length - parts.length} more`);
     }
     return parts.length > 0
       ? `${content.length} block${content.length === 1 ? "" : "s"} (${parts.join(", ")})`

@@ -126,6 +126,7 @@ test("providerShapeLabel and formatWarning", () => {
   assert.equal(providerShapeLabel("openai-like"), "OpenAI-like");
   assert.equal(providerShapeLabel("anthropic-like"), "Anthropic-like");
   assert.equal(providerShapeLabel("google-like"), "Google-like");
+  assert.equal(providerShapeLabel("bedrock-like"), "Bedrock-like");
   assert.equal(providerShapeLabel("unknown"), "Unknown");
   assert.equal(providerShapeLabel(undefined), "?");
   assert.equal(

@@ -258,6 +258,89 @@ test("scrolling inside long sections keeps every line reachable", () => {
   assert.ok(last.includes("[59] user: message 59"), "last message reachable");
 });
 
+test("scrolling inside one large expanded entry reaches the tail", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "s",
+    systemPromptOptions: undefined,
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  const body = Array.from({ length: 80 }, (_, i) => `detail line ${i}`).join("\n");
+  store.onContext([{ role: "user", content: body }], undefined, 1);
+  store.onBeforeProviderRequest({
+    payload: { messages: [{ role: "user", content: "hi" }] },
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const { detail } = detailFor(store, 30); // contentRows() = 22
+  detail.handleInput(TAB);
+  detail.handleInput(TAB); // → CONTEXT
+  detail.handleInput(ENTER); // expand the single message
+  const head = detail.render(100).join("\n");
+  assert.ok(head.includes("detail line 0"), "head visible after expand");
+  assert.ok(!head.includes("detail line 79"), "tail clipped initially");
+
+  detail.handleInput("\u001b[F"); // end → last row of the expanded entry
+  const tail = detail.render(100).join("\n");
+  assert.ok(tail.includes("detail line 79"), "tail reachable with End");
+  assert.ok(!tail.includes("[0] user"), "summary not re-rendered at the cut");
+  assert.ok(!tail.includes("detail line 0"), "head not shown when scrolled to tail");
+
+  detail.handleInput("\u001b[6~"); // page down
+  const paged = detail.render(100).join("\n");
+  assert.ok(paged.includes("detail line 79"), "PageDown keeps the tail visible");
+  assert.ok(!paged.includes("detail line 0"), "PageDown does not reset to the head");
+
+  detail.handleInput("\u001b[5~");
+  detail.handleInput("\u001b[5~");
+  detail.handleInput("\u001b[5~"); // page up ×3 → back at the top
+  const rehead = detail.render(100).join("\n");
+  assert.ok(rehead.includes("detail line 0"), "PageUp reaches the head again");
+  assert.ok(!rehead.includes("detail line 79"), "tail clipped at the top");
+});
+
+test("expanded details with long lines wrap so the tail is reachable", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "s",
+    systemPromptOptions: undefined,
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  // One giant line: summary shows only the head, expanded details wrap.
+  const long = `head-marker ${"w".repeat(3000)} tail-marker-42`;
+  store.onContext([{ role: "user", content: long }], undefined, 1);
+  store.onBeforeProviderRequest({
+    payload: { messages: [{ role: "user", content: "hi" }] },
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const { detail } = detailFor(store, 30); // contentRows() = 22
+  detail.handleInput(TAB);
+  detail.handleInput(TAB); // → CONTEXT
+  detail.handleInput(ENTER); // expand the single message
+  const head = detail.render(60).join("\n");
+  assert.ok(head.includes("head-marker"), "head of the long line visible");
+  assert.ok(!head.includes("tail-marker-42"), "tail wrapped out of view initially");
+  for (const line of detail.render(60)) {
+    assert.ok(visibleWidth(line) <= 60, "wrapped detail line exceeds width");
+  }
+  detail.handleInput("\u001b[F"); // end
+  const tail = detail.render(60).join("\n");
+  assert.ok(tail.includes("tail-marker-42"), "tail reachable after End");
+});
+
 test("malformed records render without crashing (all sections)", () => {
   const store = new SessionStore();
   store.onBeforeProviderRequest({
@@ -277,6 +360,76 @@ test("malformed records render without crashing (all sections)", () => {
   }
   const text = detail.render(80).join("\n");
   assert.ok(text.includes("Unknown"), "unknown shape stated");
+});
+
+test("OVERVIEW counts native Gemini tools via the envelope", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "sys",
+    systemPromptOptions: undefined,
+    model: { id: "gemini-2.5-flash", provider: "google" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  // googleSearch + one functionDeclaration: the envelope counts 2 while
+  // extraction yields only the functionDeclaration (index 0).
+  store.onBeforeProviderRequest({
+    payload: {
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      tools: [
+        { googleSearch: {} },
+        { functionDeclarations: [{ name: "web_search" }] },
+      ],
+    },
+    model: { id: "gemini-2.5-flash", provider: "google" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const { detail } = detailFor(store);
+  const text = detail.render(120).join("\n");
+  const match = text.match(/Provider tools\s+(\d+)/);
+  assert.ok(match, "provider tools row present");
+  assert.equal(
+    match![1],
+    "2",
+    "envelope toolCount preferred over the 1 extracted definition",
+  );
+
+  // Native-only: envelope counts 1, extraction finds nothing.
+  const nativeOnly = new SessionStore();
+  nativeOnly.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "sys",
+    systemPromptOptions: undefined,
+    model: { id: "gemini-2.5-flash", provider: "google" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  nativeOnly.onAgentStart();
+  nativeOnly.onBeforeProviderRequest({
+    payload: {
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      tools: [{ googleSearch: {} }],
+    },
+    model: { id: "gemini-2.5-flash", provider: "google" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const native = detailFor(nativeOnly);
+  const nativeText = native.detail.render(120).join("\n");
+  const nativeMatch = nativeText.match(/Provider tools\s+(\d+)/);
+  assert.ok(nativeMatch, "provider tools row present (native-only)");
+  assert.equal(
+    nativeMatch![1],
+    "1",
+    "native tool counted even with zero extracted definitions",
+  );
 });
 
 test("no tool definitions (understood schema) shows the empty message", () => {
@@ -304,4 +457,45 @@ test("no tool definitions (understood schema) shows the empty message", () => {
   const text = detail.render(120).join("\n");
   assert.ok(text.includes("No tool definitions found"), "empty-tools message");
   assert.ok(!text.includes("could not be interpreted"), "schema was understood");
+});
+
+test("height-only terminal resize recomputes the detail view", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "s",
+    systemPromptOptions: undefined,
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  store.onContext(
+    Array.from({ length: 60 }, (_, i) => ({ role: "user", content: `message ${i}` })),
+    undefined,
+    1,
+  );
+  store.onBeforeProviderRequest({
+    payload: { messages: [{ role: "user", content: "hi" }] },
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const { detail, tui } = detailFor(store, 40); // ItemListView contentRows() = 32
+  detail.handleInput(TAB);
+  detail.handleInput(TAB); // → CONTEXT
+  assert.equal(detail.render(100).length, 39); // 4 chrome + 1 title + 1 caption + 32 rows + 1 footer
+
+  // Resize only the terminal height; the same width must not hit the cache.
+  tui.terminal.rows = 20; // contentRows() = 12
+  const short = detail.render(100);
+  assert.equal(short.length, 19, "window shrinks with the terminal");
+
+  // Growing back re-clamps the scroll offset (End at 20 rows sat at 48).
+  detail.handleInput("\u001b[F");
+  tui.terminal.rows = 40; // contentRows() = 32 → max offset 28
+  const grown = detail.render(100).join("\n");
+  assert.ok(grown.includes("[28] user: message 28"), "offset re-clamped after growth");
+  assert.ok(grown.includes("[59] user: message 59"), "tail still visible");
 });
