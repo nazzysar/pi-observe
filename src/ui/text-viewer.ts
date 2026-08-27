@@ -51,6 +51,14 @@ export interface TextViewerOptions {
   footer?: string;
   /** Called on Esc/q. */
   onClose?: () => void;
+  /**
+   * Optional live cap on content rows when a parent layout renders chrome
+   * above this viewer (e.g. the detail header/tabs). Evaluated per render
+   * so terminal resizes re-budget. Without it the viewer estimates from
+   * the terminal height, which can overflow the allocated area and get
+   * clipped from the top by pi.
+   */
+  maxContentRows?: () => number;
 }
 
 /** Rows reserved below the component (status/footer/editor chrome). */
@@ -67,6 +75,7 @@ export class TextViewer {
   private readonly emptyText: string;
   private readonly footer: string | undefined;
   private readonly onClose: (() => void) | undefined;
+  private readonly maxContentRows: (() => number) | undefined;
 
   /** First visible line index (into the wrapped line sequence). */
   private offset = 0;
@@ -87,6 +96,7 @@ export class TextViewer {
     this.lines = options.lines;
     this.emptyText = options.emptyText ?? "(empty)";
     this.footer = options.footer;
+    this.maxContentRows = options.maxContentRows;
     this.onClose = options.onClose;
   }
 
@@ -121,11 +131,19 @@ export class TextViewer {
     return this.offset;
   }
 
-  /** Estimated rows available for content (excluding chrome). */
+  /**
+   * Estimated rows available for content (excluding chrome). When a
+   * parent layout imposes a cap (maxContentRows), the smaller of the
+   * two wins so the combined output never overflows the area pi
+   * allocates for the component (overflow is clipped from the top).
+   */
   private contentRows(): number {
+    const estimated =
+      Math.floor(this.tui.terminal.rows) - RESERVED_ROWS;
+    const cap = this.maxContentRows?.();
     return Math.max(
       MIN_CONTENT_ROWS,
-      Math.floor(this.tui.terminal.rows) - RESERVED_ROWS,
+      Math.min(cap ?? estimated, estimated),
     );
   }
 

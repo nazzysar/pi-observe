@@ -289,13 +289,20 @@ test("scrolling inside one large expanded entry reaches the tail", () => {
   detail.handleInput("\u001b[F"); // end → last row of the expanded entry
   const tail = detail.render(100).join("\n");
   assert.ok(tail.includes("detail line 79"), "tail reachable with End");
-  assert.ok(!tail.includes("[0] user"), "summary not re-rendered at the cut");
-  assert.ok(!tail.includes("detail line 0"), "head not shown when scrolled to tail");
+  assert.ok(tail.includes("[0] user"), "cursor summary pinned at the cut");
+  assert.ok(
+    !tail.split("\n").some((l) => l === "detail line 0"),
+    "head not re-rendered as a row when scrolled to tail",
+  );
 
   detail.handleInput("\u001b[6~"); // page down
   const paged = detail.render(100).join("\n");
   assert.ok(paged.includes("detail line 79"), "PageDown keeps the tail visible");
-  assert.ok(!paged.includes("detail line 0"), "PageDown does not reset to the head");
+  assert.ok(paged.includes("[0] user"), "summary stays pinned across PageDown");
+  assert.ok(
+    !paged.split("\n").some((l) => l === "detail line 0"),
+    "PageDown does not reset to the head",
+  );
 
   detail.handleInput("\u001b[5~");
   detail.handleInput("\u001b[5~");
@@ -303,6 +310,100 @@ test("scrolling inside one large expanded entry reaches the tail", () => {
   const rehead = detail.render(100).join("\n");
   assert.ok(rehead.includes("detail line 0"), "PageUp reaches the head again");
   assert.ok(!rehead.includes("detail line 79"), "tail clipped at the top");
+});
+
+test("multi-line messages render single-line summaries and pin the selection", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "s",
+    systemPromptOptions: undefined,
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  store.onContext(
+    Array.from({ length: 5 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content:
+        `MSG-${i}: ` +
+        Array.from({ length: i === 0 ? 30 : 2 }, (_, j) => `detail-${i}-${j}`).join("\n"),
+    })),
+    undefined,
+    1,
+  );
+  store.onBeforeProviderRequest({
+    payload: { messages: [{ role: "user", content: "hi" }] },
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const { detail } = detailFor(store, 30);
+  detail.handleInput(TAB);
+  detail.handleInput(TAB); // → CONTEXT
+
+  // Every rendered row is exactly one terminal line: no embedded newlines.
+  const collapsed = detail.render(100);
+  for (const line of collapsed) {
+    assert.ok(!line.includes("\n"), "rendered row contains no raw newline");
+  }
+  const summaryRow = collapsed.find((l) => l.startsWith("[0] user: MSG-0: detail-0-0 detail-0-1"));
+  assert.ok(summaryRow, "summary is a single collapsed line");
+  assert.ok(summaryRow!.endsWith("…"), "long summary truncated with ellipsis");
+
+  detail.handleInput(ENTER); // expand message 0 (31 rows tall)
+  detail.handleInput("\u001b[6~"); // page down → scroll deep inside entry 0
+  const tail = detail.render(100).join("\n");
+  assert.ok(tail.includes("[0] user: MSG-0"), "summary pinned while scrolled inside it");
+  assert.ok(tail.includes("detail-0-29"), "tail of the expanded entry reachable");
+  assert.ok(!tail.includes("[1] assistant"), "no other summary at the cut");
+});
+
+test("TOOLS summaries collapse newlines in names and descriptions", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "s",
+    systemPromptOptions: undefined,
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  store.onBeforeProviderRequest({
+    payload: {
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "run",
+            description: "line one\nline two",
+            parameters: { type: "object" },
+          },
+        },
+      ],
+    },
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  const { detail } = detailFor(store);
+  detail.handleInput(TAB);
+  detail.handleInput(TAB);
+  detail.handleInput(TAB); // → TOOLS
+  const lines = detail.render(120);
+  for (const line of lines) {
+    assert.ok(!line.includes("\n"), "rendered row contains no raw newline");
+  }
+  assert.ok(
+    lines.some((l) => l.includes("[0] run — line one line two")),
+    "description collapsed to a single line",
+  );
 });
 
 test("expanded details with long lines wrap so the tail is reachable", () => {
@@ -482,20 +583,71 @@ test("height-only terminal resize recomputes the detail view", () => {
     contextUsage: undefined,
     timestamp: 2,
   });
-  const { detail, tui } = detailFor(store, 40); // ItemListView contentRows() = 32
+  const { detail, tui } = detailFor(store, 40); // contentRows() = 40 − 4 header − 6 chrome = 30
   detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
-  assert.equal(detail.render(100).length, 39); // 4 chrome + 1 title + 1 caption + 32 rows + 1 footer
+  assert.equal(detail.render(100).length, 37); // 4 chrome + 1 title + 1 caption + 30 rows + 1 footer
 
   // Resize only the terminal height; the same width must not hit the cache.
-  tui.terminal.rows = 20; // contentRows() = 12
+  tui.terminal.rows = 20; // contentRows() = 10
   const short = detail.render(100);
-  assert.equal(short.length, 19, "window shrinks with the terminal");
+  assert.equal(short.length, 17, "window shrinks with the terminal");
 
   // Growing back re-clamps the scroll offset (End at 20 rows sat at 48).
   detail.handleInput("\u001b[F");
-  tui.terminal.rows = 40; // contentRows() = 32 → max offset 28
+  tui.terminal.rows = 40; // contentRows() = 30 → max offset 30
   const grown = detail.render(100).join("\n");
-  assert.ok(grown.includes("[28] user: message 28"), "offset re-clamped after growth");
+  assert.ok(grown.includes("[30] user: message 30"), "offset re-clamped after growth");
   assert.ok(grown.includes("[59] user: message 59"), "tail still visible");
+});
+
+test("tabs stay visible on SYSTEM/RAW even with long content", () => {
+  const store = new SessionStore();
+  store.onBeforeAgentStart({
+    prompt: "p",
+    systemPrompt: "s",
+    systemPromptOptions: undefined,
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    timestamp: 1,
+  });
+  store.onAgentStart();
+  store.onContext([{ role: "user", content: "hi" }], undefined, 1);
+  store.onBeforeProviderRequest({
+    payload: { messages: [{ role: "user", content: "hi" }] },
+    model: { id: "m", provider: "p" },
+    thinkingLevel: undefined,
+    contextUsage: undefined,
+    timestamp: 2,
+  });
+  // The most recent record holds the long system prompt and payload.
+  const longRecord = store.getLatestRequest()!;
+  longRecord.prompt = {
+    systemPrompt: Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n"),
+    systemPromptOptions: { cwd: "/tmp" },
+    model: undefined,
+    thinkingLevel: undefined,
+    timestamp: 1,
+  };
+  longRecord.sanitizedProviderPayload = {
+    data: Array.from({ length: 200 }, (_, i) => `item ${i}`).join("\n"),
+  };
+  const { detail } = detailFor(store, 30); // contentRows() = 30 − 10 = 20
+  const assertTabsVisible = (label: string): void => {
+    const lines = detail.render(100);
+    assert.ok(
+      lines[0]!.includes("Pi Request Inspector"),
+      `${label}: inspector title stays visible`,
+    );
+    assert.ok(lines[1]!.includes("OVERVIEW"), `${label}: tabs stay visible`);
+    assert.ok(lines[1]!.includes("RAW"), `${label}: RAW tab label visible`);
+    assert.ok(
+      lines.length <= 27,
+      `${label}: total lines fit the editor area (30 rows − 3 chrome)`,
+    );
+  };
+  detail.handleInput(TAB); // → SYSTEM
+  assertTabsVisible("SYSTEM");
+  detail.handleInput(TAB); // → RAW
+  assertTabsVisible("RAW");
 });

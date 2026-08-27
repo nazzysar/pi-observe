@@ -49,3 +49,30 @@ test("summarizeMessage: many blocks truncates with correct remainder", () => {
   assert.ok(summary.startsWith("assistant: 20 blocks ("), summary);
   assert.ok(summary.endsWith("+12 more)"), summary);
 });
+
+test("summarizeMessage: newlines collapse so summaries are single-line", () => {
+  // Raw multi-line string content: must render as one terminal line.
+  assert.equal(
+    summarize({ role: "user", content: "line one\nline two\n\nline three" }),
+    "user: line one line two line three",
+  );
+  // Tabs and repeated spaces collapse too.
+  assert.equal(
+    summarize({ role: "user", content: "a\t\tb\n   c" }),
+    "user: a b c",
+  );
+  // Text blocks with newlines: collapsed inside the quoted snippet.
+  const withBlocks = summarize({
+    role: "assistant",
+    content: [{ type: "text", text: "first\nsecond" }],
+  });
+  assert.equal(withBlocks, 'assistant: 1 block (text "first second")');
+  // Collapsed output never contains a newline, whatever the input shape.
+  for (const msg of [
+    { role: "tool", result: { ok: true } },
+    "plain\nstring",
+    { role: "user", content: "x\ny\nz" },
+  ]) {
+    assert.ok(!summarize(msg).includes("\n"), `single-line for ${JSON.stringify(msg)}`);
+  }
+});

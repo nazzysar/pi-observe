@@ -147,7 +147,8 @@ selection-following scroll.
 - `SYSTEM` — effective system prompt + structured `systemPromptOptions`
   (no provenance decomposition — later phase)
 - `CONTEXT` — logical model-facing messages (expand for full content);
-  never silently substituted with provider-payload messages
+  summaries are single-line, and the selected message's summary stays
+  pinned at the top of the window while its detail is scrolled
 - `TOOLS` — P0.2 extraction (expand for raw definitions); an
   uninterpretable schema explicitly says so and points to RAW
 - `RAW` — sanitized provider payload observed by the extension

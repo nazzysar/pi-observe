@@ -22,6 +22,8 @@ export interface JsonViewerOptions {
   /** Left-hand footer hint. */
   footer?: string;
   onClose?: () => void;
+  /** Live cap on content rows when a parent layout renders chrome above. */
+  maxContentRows?: () => number;
 }
 
 /** Create a scrolling JSON viewer for an arbitrary observed value. */
@@ -36,5 +38,6 @@ export function createJsonViewer(options: JsonViewerOptions): TextViewer {
     emptyText: "(empty payload)",
     footer: options.footer ?? "↑↓ scroll   esc/q close",
     onClose: options.onClose,
+    maxContentRows: options.maxContentRows,
   });
 }

@@ -17,6 +17,7 @@
 
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
+  collapseWhitespace,
   formatContextUsage,
   formatCount,
   formatThinkingLevel,
@@ -41,6 +42,14 @@ const SECTION_IDS: DetailSectionId[] = [
 ];
 
 const SECTION_FOOTER = "↑↓ navigate   enter expand   ←→/tab sections   esc/q back";
+
+/**
+ * Header rows the detail component renders above its section view:
+ * inspector title, tabs, metadata, blank separator.
+ */
+const DETAIL_HEADER_ROWS = 4;
+/** Rows pi reserves below the editor area (dock, status, editor chrome). */
+const PI_CHROME_ROWS = 6;
 
 export interface RequestDetailOptions {
   tui: ViewerTui;
@@ -69,6 +78,8 @@ class ItemListView {
   private readonly emptyMessage: string;
   private readonly footer: string;
   private readonly onClose: (() => void) | undefined;
+  /** Parent-imposed live cap on content rows (keeps the tabs visible). */
+  private readonly maxContentRows: (() => number) | undefined;
   private readonly expanded = new Set<number>();
   private cursor = 0;
   private offset = 0;
@@ -90,6 +101,8 @@ class ItemListView {
     emptyMessage: string;
     footer: string;
     onClose?: () => void;
+    /** Parent-imposed live cap on content rows. */
+    maxContentRows?: () => number;
   }) {
     this.tui = options.tui;
     this.theme = options.theme;
@@ -98,11 +111,14 @@ class ItemListView {
     this.entries = options.entries;
     this.emptyMessage = options.emptyMessage;
     this.footer = options.footer;
+    this.maxContentRows = options.maxContentRows;
     this.onClose = options.onClose;
   }
 
   private contentRows(): number {
-    return Math.max(4, Math.floor(this.tui.terminal.rows) - 8);
+    const estimated = Math.floor(this.tui.terminal.rows) - 8;
+    const cap = this.maxContentRows?.();
+    return Math.max(4, Math.min(cap ?? estimated, estimated));
   }
 
   /** Number of rows entry `index` occupies (1 summary + expanded details). */
@@ -142,6 +158,25 @@ class ItemListView {
     return Math.max(0, this.entries.length - 1);
   }
 
+  /** True when the cursor entry's summary has scrolled above the viewport. */
+  private pinActive(): boolean {
+    return this.entries.length > 0 && this.rowOf(this.cursor) < this.offset;
+  }
+
+  /**
+   * Rows available for the scroll window. When the cursor entry's
+   * summary is pinned above the window, it consumes one row, so the
+   * window shrinks by one to keep the total rendered height stable.
+   */
+  private windowRows(): number {
+    return Math.max(1, this.contentRows() - (this.pinActive() ? 1 : 0));
+  }
+
+  /** Single-line summary for entry `index` (defensive: never a raw newline). */
+  private summaryOf(index: number): string {
+    return collapseWhitespace(this.entries[index]!.summary);
+  }
+
   private clamp(): void {
     const count = this.entries.length;
     if (count === 0) {
@@ -159,23 +194,23 @@ class ItemListView {
       // the entry so sub-entry scroll positions (PageUp/PageDown/End)
       // survive the clamp instead of snapping back to the summary.
       if (this.offset < cursorRow) this.offset = cursorRow;
-      const tailOffset = cursorRow + cursorRows - rows;
+      const tailOffset = cursorRow + cursorRows - this.windowRows();
       if (this.offset > tailOffset) this.offset = tailOffset;
     } else {
       // Cursor entry fits the viewport: reveal it fully.
       if (cursorRow < this.offset) this.offset = cursorRow;
       const cursorEnd = cursorRow + cursorRows;
-      if (cursorEnd > this.offset + rows) {
-        this.offset = cursorEnd - rows;
+      if (cursorEnd > this.offset + this.windowRows()) {
+        this.offset = cursorEnd - this.windowRows();
       }
     }
-    const maxOffset = Math.max(0, this.totalRows() - rows);
+    const maxOffset = Math.max(0, this.totalRows() - this.windowRows());
     if (this.offset > maxOffset) this.offset = maxOffset;
     if (this.offset < 0) this.offset = 0;
   }
 
   handleInput(data: string): void {
-    const rows = this.contentRows();
+    const rows = this.windowRows();
     if (matchesKey(data, Key.up)) {
       if (this.cursor > 0) this.cursor -= 1;
     } else if (matchesKey(data, Key.down)) {
@@ -194,7 +229,10 @@ class ItemListView {
       this.cursor = Math.max(0, this.entries.length - 1);
       // Jump straight to the last row instead of relying on the clamp,
       // which (correctly) preserves sub-entry offsets for tall entries.
-      this.offset = Math.max(0, this.totalRows() - this.contentRows());
+      // When the cursor summary is pinned the window is one row shorter,
+      // so the max offset is one higher; the clamp then normalizes the
+      // collapsed-entry case back down.
+      this.offset = Math.max(0, this.totalRows() - this.contentRows() + 1);
     } else if (matchesKey(data, Key.enter)) {
       if (this.entries.length > 0) {
         if (this.expanded.has(this.cursor)) this.expanded.delete(this.cursor);
@@ -249,10 +287,22 @@ class ItemListView {
       out.push(truncateToWidth(theme.fg("dim", this.caption), safeWidth));
     }
     this.clamp();
-    const rows = this.contentRows();
+    const rows = this.windowRows();
+    const pinned = this.pinActive();
     if (this.entries.length === 0) {
       out.push(truncateToWidth(theme.fg("dim", this.emptyMessage), safeWidth));
     } else {
+      if (pinned) {
+        // The cursor entry's summary scrolled above the viewport: pin it
+        // at the top of the window so the current section stays
+        // identifiable no matter how deep the detail is scrolled.
+        out.push(
+          theme.bg(
+            "selectedBg",
+            truncateToWidth(this.summaryOf(this.cursor), safeWidth),
+          ),
+        );
+      }
       // Render rows [`offset`, `offset + rows`), walking entries. An entry
       // whose summary lies above the viewport is cut into: only its detail
       // lines from the cut row are shown, never the summary again.
@@ -265,7 +315,7 @@ class ItemListView {
           const visibleStart = Math.max(start, this.offset);
           const selected = i === this.cursor;
           if (visibleStart === start) {
-            const line = truncateToWidth(this.entries[i]!.summary, safeWidth);
+            const line = truncateToWidth(this.summaryOf(i), safeWidth);
             out.push(selected ? theme.bg("selectedBg", line) : line);
             rendered += 1;
           }
@@ -413,6 +463,14 @@ export class RequestDetailComponent {
     return truncateToWidth(labels.join(" "), width);
   }
 
+  /** Content rows each section view may occupy so the header + tabs always fit. */
+  private viewContentBudget(): number {
+    return Math.max(
+      4,
+      this.tui.terminal.rows - DETAIL_HEADER_ROWS - PI_CHROME_ROWS,
+    );
+  }
+
   private buildSection(index: number): TextViewer | ItemListView {
     const theme = this.theme;
     const record = this.record;
@@ -426,6 +484,7 @@ export class RequestDetailComponent {
           title: "Request overview",
           lines: this.overviewLines(),
           footer: SECTION_FOOTER,
+          maxContentRows: () => this.viewContentBudget(),
           onClose: back,
         });
       case "SYSTEM":
@@ -436,6 +495,7 @@ export class RequestDetailComponent {
           caption: "assembled by Pi (captured at before_agent_start) + structured systemPromptOptions",
           lines: this.systemLines(),
           footer: SECTION_FOOTER,
+          maxContentRows: () => this.viewContentBudget(),
           onClose: back,
         });
       case "CONTEXT": {
@@ -455,6 +515,7 @@ export class RequestDetailComponent {
               ? "No logical context captured for this request (before_provider_request had no pending context event)."
               : "(no logical messages)",
           footer: SECTION_FOOTER,
+          maxContentRows: () => this.viewContentBudget(),
           onClose: back,
         });
       }
@@ -463,8 +524,10 @@ export class RequestDetailComponent {
         const entries: ItemViewEntry[] = (tools ?? []).map((tool) => ({
           summary:
             `[${tool.index}] ` +
-            (tool.name ?? "(unnamed)") +
-            (tool.description ? ` — ${tool.description}` : ""),
+            (tool.name ? collapseWhitespace(tool.name) : "(unnamed)") +
+            (tool.description
+              ? ` — ${collapseWhitespace(tool.description)}`
+              : ""),
           details: safePrettyJson(tool.raw),
         }));
         return new ItemListView({
@@ -478,6 +541,7 @@ export class RequestDetailComponent {
               ? `Tool schema could not be interpreted for this provider payload (shape: ${providerShapeLabel(record.providerEnvelope?.detectedShape)}). See RAW for the observed payload.`
               : "No tool definitions found in this provider payload.",
           footer: SECTION_FOOTER,
+          maxContentRows: () => this.viewContentBudget(),
           onClose: back,
         });
       }
@@ -489,6 +553,7 @@ export class RequestDetailComponent {
           caption: "sanitized snapshot captured at before_provider_request — not guaranteed wire bytes",
           value: record.sanitizedProviderPayload,
           footer: SECTION_FOOTER,
+          maxContentRows: () => this.viewContentBudget(),
           onClose: back,
         });
       default:
@@ -567,7 +632,9 @@ export class RequestDetailComponent {
   }
 
   invalidate(): void {
-    for (const view of this.views) view.invalidate();
+    // `views` is sparse (sections build lazily); array iteration yields
+    // undefined for empty slots, so guard each entry.
+    for (const view of this.views) view?.invalidate();
   }
 }
 

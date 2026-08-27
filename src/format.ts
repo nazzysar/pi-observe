@@ -115,10 +115,22 @@ export function truncateModelId(
 }
 
 /**
+ * Collapse runs of whitespace (including newlines) to a single space
+ * and trim. TUI list rows must be exactly one terminal line each, so
+ * summaries are strictly single-line: an embedded newline would render
+ * as multiple rows and desync the list's scroll window from the
+ * terminal, visually duplicating content.
+ */
+export function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+/**
  * One-line compact summary of a logical context message:
  * "user: fix the build in src/index.ts", "assistant: 3 blocks
  * (text, toolCall)", "tool: result for read". Defensive against every
  * message shape; unknown shapes fall back to a JSON-ish string.
+ * Always single-line: whitespace/newlines are collapsed.
  */
 export function summarizeMessage(
   message: unknown,
@@ -127,7 +139,7 @@ export function summarizeMessage(
   const role = messageRole(message);
   const body = messageBody(message);
   const label = role ? `${role}: ${body}` : body;
-  return truncateUtf8(label, maxLength);
+  return truncateUtf8(collapseWhitespace(label), maxLength);
 }
 
 /** Best-effort role/type of a message; "" when not discoverable. */
@@ -170,7 +182,7 @@ function blockSummary(block: unknown): string {
   const record = block as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : "block";
   if (typeof record.text === "string") {
-    return `${type} "${truncateUtf8(record.text, 24)}"`;
+    return `${type} "${truncateUtf8(collapseWhitespace(record.text), 24)}"`;
   }
   if (typeof record.name === "string") {
     return `${type} ${record.name}`;
