@@ -108,7 +108,7 @@ ln -s "$(pwd)" ~/.pi/agent/extensions/pi-observe
 ```
 
 Then run `pi` — extension auto-discovers via `package.json` →
-`pi.extensions: ["./src/index.ts"]`.
+`pi.extensions: ["./pi-observe.ts"]`.
 
 Config: `PI_OBSERVE_MAX_REQUESTS` (default 100) bounds retained
 records; oldest are evicted. Nothing is persisted.
