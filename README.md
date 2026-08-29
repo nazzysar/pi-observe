@@ -121,7 +121,8 @@ rm ~/.pi/agent/extensions/pi-observe
 
 ## P0.3 — Request inspector (`/inspect`)
 
-Local-only command: opens a TUI over the observation store. It sends no
+Local-only command: opens a full-viewport overlay TUI over the
+observation store. It sends no
 model message, registers no LLM-callable tool, and never mutates
 session context, the system prompt, or provider payloads — it only
 reads store state (`getState` / `getRequest`).

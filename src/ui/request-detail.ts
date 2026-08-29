@@ -48,8 +48,8 @@ const SECTION_FOOTER = "↑↓ navigate   enter expand   ←→/tab sections   e
  * inspector title, tabs, metadata, blank separator.
  */
 const DETAIL_HEADER_ROWS = 4;
-/** Rows pi reserves below the editor area (dock, status, editor chrome). */
-const PI_CHROME_ROWS = 6;
+/** Rows each section view adds around its content (title, caption, footer). */
+const PI_CHROME_ROWS = 3;
 
 export interface RequestDetailOptions {
   tui: ViewerTui;
@@ -116,7 +116,7 @@ class ItemListView {
   }
 
   private contentRows(): number {
-    const estimated = Math.floor(this.tui.terminal.rows) - 8;
+    const estimated = Math.floor(this.tui.terminal.rows) - 7;
     const cap = this.maxContentRows?.();
     return Math.max(4, Math.min(cap ?? estimated, estimated));
   }
@@ -449,6 +449,9 @@ export class RequestDetailComponent {
     out.push(theme.fg("dim", truncateToWidth(meta, safeWidth)));
     out.push("");
     out.push(...this.currentView().render(safeWidth));
+    // Fill the viewport so the fullscreen overlay covers everything behind it.
+    const fillRows = Math.max(out.length, Math.floor(this.tui.terminal.rows));
+    while (out.length < fillRows) out.push("");
     return out;
   }
 

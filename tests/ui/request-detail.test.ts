@@ -583,19 +583,19 @@ test("height-only terminal resize recomputes the detail view", () => {
     contextUsage: undefined,
     timestamp: 2,
   });
-  const { detail, tui } = detailFor(store, 40); // contentRows() = 40 − 4 header − 6 chrome = 30
+  const { detail, tui } = detailFor(store, 40); // contentRows() = 40 − 4 header − 3 chrome = 33
   detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
-  assert.equal(detail.render(100).length, 37); // 4 chrome + 1 title + 1 caption + 30 rows + 1 footer
+  assert.equal(detail.render(100).length, 40); // 4 chrome + 1 title + 1 caption + 33 rows + 1 footer = full viewport
 
   // Resize only the terminal height; the same width must not hit the cache.
-  tui.terminal.rows = 20; // contentRows() = 10
+  tui.terminal.rows = 20; // contentRows() = 13
   const short = detail.render(100);
-  assert.equal(short.length, 17, "window shrinks with the terminal");
+  assert.equal(short.length, 20, "window shrinks with the terminal");
 
-  // Growing back re-clamps the scroll offset (End at 20 rows sat at 48).
+  // Growing back re-clamps the scroll offset (End at 20 rows sat at 47).
   detail.handleInput("\u001b[F");
-  tui.terminal.rows = 40; // contentRows() = 30 → max offset 30
+  tui.terminal.rows = 40; // contentRows() = 33 → max offset 27
   const grown = detail.render(100).join("\n");
   assert.ok(grown.includes("[30] user: message 30"), "offset re-clamped after growth");
   assert.ok(grown.includes("[59] user: message 59"), "tail still visible");
@@ -632,7 +632,7 @@ test("tabs stay visible on SYSTEM/RAW even with long content", () => {
   longRecord.sanitizedProviderPayload = {
     data: Array.from({ length: 200 }, (_, i) => `item ${i}`).join("\n"),
   };
-  const { detail } = detailFor(store, 30); // contentRows() = 30 − 10 = 20
+  const { detail } = detailFor(store, 30); // contentRows() = 30 − 7 = 23
   const assertTabsVisible = (label: string): void => {
     const lines = detail.render(100);
     assert.ok(
@@ -642,8 +642,8 @@ test("tabs stay visible on SYSTEM/RAW even with long content", () => {
     assert.ok(lines[1]!.includes("OVERVIEW"), `${label}: tabs stay visible`);
     assert.ok(lines[1]!.includes("RAW"), `${label}: RAW tab label visible`);
     assert.ok(
-      lines.length <= 27,
-      `${label}: total lines fit the editor area (30 rows − 3 chrome)`,
+      lines.length <= 30,
+      `${label}: total lines fill but never overflow the viewport (30 rows)`,
     );
   };
   detail.handleInput(TAB); // → SYSTEM

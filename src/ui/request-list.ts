@@ -66,7 +66,9 @@ export class RequestListComponent {
   }
 
   private contentRows(): number {
-    return Math.max(4, Math.floor(this.tui.terminal.rows) - 10);
+    // Fullscreen overlay: title + summary + header + rows + footer must fill
+    // the whole terminal height, so reserve only this component's own chrome.
+    return Math.max(4, Math.floor(this.tui.terminal.rows) - 4);
   }
 
   private clampOffset(): void {
@@ -150,6 +152,9 @@ export class RequestListComponent {
       }
     }
     out.push(this.footerLine(safeWidth, records.length));
+    // Fill the viewport so the fullscreen overlay covers everything behind it.
+    const fillRows = Math.max(out.length, Math.floor(this.tui.terminal.rows));
+    while (out.length < fillRows) out.push("");
     this.cachedWidth = width;
     this.cachedRows = this.contentRows();
     this.cachedLines = out;

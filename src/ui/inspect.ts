@@ -21,6 +21,12 @@ import { RequestListComponent } from "./request-list.ts";
 
 const STATUS_KEY = "pi-observe";
 
+/** Open the inspector as a full-viewport overlay instead of inline content. */
+const FULLSCREEN_OVERLAY = {
+  overlay: true,
+  overlayOptions: { width: "100%", maxHeight: "100%", margin: 0 },
+} as const;
+
 type ListResult =
   | { kind: "pick"; record: RequestRecord }
   | { kind: "close" };
@@ -119,6 +125,7 @@ async function showListLoop(
           });
           return list;
         },
+        FULLSCREEN_OVERLAY,
       );
       if (!result || result.kind === "close") return;
       current = result.record;
@@ -134,6 +141,7 @@ async function showListLoop(
           });
           return detail;
         },
+        FULLSCREEN_OVERLAY,
       );
       if (!result || result.kind === "close") return;
       current = null; // back to the ledger
@@ -159,6 +167,7 @@ async function showDetailLoop(
       });
       return detail;
     },
+    FULLSCREEN_OVERLAY,
   );
   if (!result || result.kind === "close") return;
   // Back from a targeted detail falls through to the ledger.

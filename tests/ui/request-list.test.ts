@@ -195,15 +195,15 @@ test("retention-sized history (100) navigates without layout breakage", () => {
 
 test("height-only terminal resize recomputes the ledger view", () => {
   const store = seedStore({ requests: 55, maxRequests: 100 });
-  const { list, tui } = listFor(store, 40); // 30 content rows
-  assert.equal(list.render(100).length, 34); // 3 header + 30 rows + footer
+  const { list, tui } = listFor(store, 40); // 36 content rows
+  assert.equal(list.render(100).length, 40); // 3 header + 36 rows + footer = full viewport
 
   // Resize only the terminal height; the same width must not hit the cache.
-  tui.terminal.rows = 20; // 10 content rows
+  tui.terminal.rows = 20; // 16 content rows
   const short = list.render(100);
-  assert.equal(short.length, 14, "fewer rows after shrink");
+  assert.equal(short.length, 20, "fewer rows after shrink");
   assert.ok(
-    short.some((l) => l.includes("1-10/55")),
+    short.some((l) => l.includes("1-16/55")),
     "footer reflects the new window",
   );
 });
