@@ -83,6 +83,7 @@ test("OVERVIEW shows metadata, shape, counts, and warnings", () => {
 
 test("SYSTEM shows effective prompt and structured systemPromptOptions", () => {
   const { detail } = detailFor(seedStore({ requests: 1 }));
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → SYSTEM
   const lines = detail.render(120);
   const text = lines.join("\n");
@@ -95,6 +96,7 @@ test("SYSTEM shows effective prompt and structured systemPromptOptions", () => {
 
 test("CONTEXT shows logical messages and expands full content", () => {
   const { detail, tui } = detailFor(seedStore({ requests: 1 }));
+  detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
   const collapsed = detail.render(120);
@@ -115,6 +117,7 @@ test("CONTEXT shows logical messages and expands full content", () => {
 
 test("TOOLS shows extracted definitions and expands raw schema", () => {
   const { detail } = detailFor(seedStore({ requests: 1 }));
+  detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB); // → TOOLS
@@ -152,6 +155,7 @@ test("unknown provider schema falls back explicitly and never fabricates tools",
   const { detail } = detailFor(store);
   detail.handleInput(TAB);
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → TOOLS
   const text = detail.render(120).join("\n");
   assert.ok(text.includes("could not be interpreted"), "explicit fallback");
@@ -185,6 +189,7 @@ test("RAW shows the sanitized observed payload", () => {
   detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → RAW
   const text = detail.render(120).join("\n");
   assert.ok(text.includes("observed by this extension"), "truthful label");
@@ -197,22 +202,30 @@ test("section switching via arrows, tab, shift+tab, and digits", () => {
   const { detail } = detailFor(seedStore({ requests: 1 }));
   assert.equal(detail.section, "OVERVIEW");
   detail.handleInput("\u001b[C"); // right
+  assert.equal(detail.section, "DIFF");
+  detail.handleInput("\u001b[C");
   assert.equal(detail.section, "SYSTEM");
   detail.handleInput("\u001b[C");
   assert.equal(detail.section, "CONTEXT");
   detail.handleInput("\u001b[D"); // left
   assert.equal(detail.section, "SYSTEM");
   detail.handleInput(SHIFT_TAB);
+  detail.handleInput(SHIFT_TAB);
   assert.equal(detail.section, "OVERVIEW");
   detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB);
-  detail.handleInput(TAB); // → RAW (wraps from CONTEXT through TOOLS)
+  detail.handleInput(TAB);
+  detail.handleInput(TAB); // → RAW (OVERVIEW → DIFF → SYSTEM → CONTEXT → TOOLS → RAW)
   assert.equal(detail.section, "RAW");
   detail.handleInput(TAB); // wraps around to OVERVIEW
   assert.equal(detail.section, "OVERVIEW");
-  detail.handleInput("4");
+  detail.handleInput("5");
   assert.equal(detail.section, "TOOLS");
+  detail.handleInput("2");
+  assert.equal(detail.section, "DIFF");
+  detail.handleInput("d");
+  assert.equal(detail.section, "DIFF", "d jumps to the DIFF tab");
 });
 
 test("esc and q trigger back; back to the ledger is the detail's only exit", () => {
@@ -250,6 +263,7 @@ test("scrolling inside long sections keeps every line reachable", () => {
   });
   const { detail } = detailFor(store, 30);
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
   const first = detail.render(100).join("\n");
   assert.ok(first.includes("[0] user: message 0"));
@@ -279,6 +293,7 @@ test("scrolling inside one large expanded entry reaches the tail", () => {
     timestamp: 2,
   });
   const { detail } = detailFor(store, 30); // contentRows() = 22
+  detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
   detail.handleInput(ENTER); // expand the single message
@@ -342,6 +357,7 @@ test("multi-line messages render single-line summaries and pin the selection", (
   });
   const { detail } = detailFor(store, 30);
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
 
   // Every rendered row is exactly one terminal line: no embedded newlines.
@@ -395,6 +411,7 @@ test("TOOLS summaries collapse newlines in names and descriptions", () => {
   const { detail } = detailFor(store);
   detail.handleInput(TAB);
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → TOOLS
   const lines = detail.render(120);
   for (const line of lines) {
@@ -429,6 +446,7 @@ test("expanded details with long lines wrap so the tail is reachable", () => {
   });
   const { detail } = detailFor(store, 30); // contentRows() = 22
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
   detail.handleInput(ENTER); // expand the single message
   const head = detail.render(60).join("\n");
@@ -452,7 +470,7 @@ test("malformed records render without crashing (all sections)", () => {
     timestamp: 3,
   });
   const { detail } = detailFor(store);
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     const lines = detail.render(80);
     for (const line of lines) {
       assert.ok(visibleWidth(line) <= 80, "no overflow");
@@ -554,6 +572,7 @@ test("no tool definitions (understood schema) shows the empty message", () => {
   const { detail } = detailFor(store);
   detail.handleInput(TAB);
   detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → TOOLS
   const text = detail.render(120).join("\n");
   assert.ok(text.includes("No tool definitions found"), "empty-tools message");
@@ -584,6 +603,7 @@ test("height-only terminal resize recomputes the detail view", () => {
     timestamp: 2,
   });
   const { detail, tui } = detailFor(store, 40); // contentRows() = 40 − 4 header − 3 chrome = 33
+  detail.handleInput(TAB);
   detail.handleInput(TAB);
   detail.handleInput(TAB); // → CONTEXT
   assert.equal(detail.render(100).length, 40); // 4 chrome + 1 title + 1 caption + 33 rows + 1 footer = full viewport
@@ -646,8 +666,12 @@ test("tabs stay visible on SYSTEM/RAW even with long content", () => {
       `${label}: total lines fill but never overflow the viewport (30 rows)`,
     );
   };
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → SYSTEM
   assertTabsVisible("SYSTEM");
+  detail.handleInput(TAB);
+  detail.handleInput(TAB);
+  detail.handleInput(TAB);
   detail.handleInput(TAB); // → RAW
   assertTabsVisible("RAW");
 });

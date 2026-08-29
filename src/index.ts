@@ -9,6 +9,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DiffService } from "./diff/request-diff.ts";
 import { installObserver } from "./recorder.ts";
 import { SessionStore } from "./store.ts";
 import { registerInspectCommand } from "./ui/inspect.ts";
@@ -24,8 +25,14 @@ function readMaxRequests(): number {
 
 export default function (pi: ExtensionAPI): void {
   const store = new SessionStore({ maxRequests: readMaxRequests() });
-  installObserver(pi, { store });
   // P0.3: local request inspector. Registers no tools, sends no messages,
   // and only ever reads store state when the user invokes /inspect.
-  registerInspectCommand(pi, store);
+  // P1: DiffService derives request diffs lazily from immutable records;
+  // it never participates in capture.
+  const diffService = new DiffService();
+  // The diff cache is keyed by request seq only; on session reset the
+  // seq counter restarts at 1, so the cache must be dropped or a new
+  // session would be served diffs from the previous session's records.
+  installObserver(pi, { store, onReset: () => diffService.clear() });
+  registerInspectCommand(pi, store, { diffService });
 }

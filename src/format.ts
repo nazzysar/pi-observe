@@ -87,6 +87,18 @@ export function formatContextUsage(
   return `${tokens} / ${window}`;
 }
 
+/** Signed compact token delta: 6221 → "+6.2k", -1200 → "-1.2k", 0 → "+0". */
+export function formatSignedTokens(delta: number): string {
+  const sign = delta > 0 ? "+" : delta < 0 ? "-" : "+";
+  return sign + formatTokens(Math.abs(delta));
+}
+
+/** Signed integer delta: 3 → "+3", -1 → "-1", 0 → "+0". */
+export function formatSignedCount(delta: number): string {
+  const sign = delta > 0 ? "+" : delta < 0 ? "-" : "+";
+  return sign + String(Math.abs(delta));
+}
+
 /** Compact timestamp "YYYY-MM-DD HH:MM:SS". Unknown → "?". */
 export function formatTimestamp(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms)) return UNKNOWN;
@@ -229,4 +241,32 @@ export function safePrettyJson(value: unknown): string {
 /** One-line warning display: "code: message". */
 export function formatWarning(warning: ObservationWarning): string {
   return `${warning.code}: ${warning.message}`;
+}
+
+/**
+ * Full text of a logical message: text extraction, else pretty JSON.
+ * Used for expandable message entries in CONTEXT and DIFF views.
+ */
+export function messageFullText(message: unknown): string {
+  if (typeof message === "string") return message;
+  if (message === null || typeof message !== "object") {
+    return safePrettyJson(message);
+  }
+  const record = message as Record<string, unknown>;
+  const content = record.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block !== null && typeof block === "object") {
+        const b = block as Record<string, unknown>;
+        if (typeof b.text === "string") parts.push(b.text);
+        else parts.push(safePrettyJson(b));
+      } else {
+        parts.push(safePrettyJson(block));
+      }
+    }
+    if (parts.length > 0) return parts.join("\n");
+  }
+  return safePrettyJson(message);
 }

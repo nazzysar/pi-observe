@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { SessionStore } from "../../src/store.ts";
 import { RequestListComponent } from "../../src/ui/request-list.ts";
+import { DiffService } from "../../src/diff/request-diff.ts";
 import { fakeTheme, fakeTui, seedStore } from "./helpers.ts";
 
 function listFor(
@@ -195,15 +196,108 @@ test("retention-sized history (100) navigates without layout breakage", () => {
 
 test("height-only terminal resize recomputes the ledger view", () => {
   const store = seedStore({ requests: 55, maxRequests: 100 });
-  const { list, tui } = listFor(store, 40); // 36 content rows
-  assert.equal(list.render(100).length, 40); // 3 header + 36 rows + footer = full viewport
+  const { list, tui } = listFor(store, 40); // 33 content rows + 3 preview rows
+  assert.equal(list.render(100).length, 40); // 3 header + 33 rows + blank + 2 preview + footer
 
   // Resize only the terminal height; the same width must not hit the cache.
-  tui.terminal.rows = 20; // 16 content rows
+  tui.terminal.rows = 20; // 13 content rows + 3 preview rows
   const short = list.render(100);
   assert.equal(short.length, 20, "fewer rows after shrink");
   assert.ok(
-    short.some((l) => l.includes("1-16/55")),
+    short.some((l) => l.includes("1-13/55")),
     "footer reflects the new window",
+  );
+});
+
+test("delta preview: unchanged parts render '=', counts render '+N/~N' (P1)", () => {
+  // Two requests differing only in reported context usage: every part of
+  // the preview must be consistent ('=' for unchanged msg/system/tools).
+  const store = new SessionStore();
+  const model = { id: "openrouter/deepseek-v4", provider: "openrouter", api: "openai-completions" };
+  const request = (timestamp: number) => {
+    store.onBeforeAgentStart({
+      prompt: "p",
+      systemPrompt: "sys",
+      systemPromptOptions: { cwd: "/x" },
+      model,
+      thinkingLevel: "high",
+      timestamp: timestamp - 1,
+    });
+    store.onAgentStart();
+    store.onContext(
+      [{ role: "user", content: "same" }],
+      { tokens: 1000 * timestamp, contextWindow: 128000, percent: 1 },
+      timestamp - 1,
+    );
+    store.onBeforeProviderRequest({
+      payload: { model: "m", messages: [{ role: "user", content: "same" }], tools: [] },
+      model,
+      thinkingLevel: "high",
+      contextUsage: { tokens: 1000 * timestamp, contextWindow: 128000, percent: 1 },
+      timestamp,
+    });
+  };
+  request(1);
+  request(2);
+  const list = new RequestListComponent({
+    tui: fakeTui(40),
+    theme: fakeTheme(),
+    state: store.getState(),
+    sessionId: "abc",
+    diffService: new DiffService(),
+    onSelect: () => {},
+    onClose: () => {},
+  });
+  const lines = list.render(120);
+  const idx = lines.findIndex((l) => l.startsWith("Δ"));
+  assert.ok(idx >= 0, "delta preview header rendered");
+  const detail = lines[idx + 1];
+  assert.ok(detail?.includes("msg ="), `unchanged messages render '=': ${detail}`);
+  assert.ok(detail?.includes("system ="), detail);
+  assert.ok(detail?.includes("tools ="), detail);
+  assert.ok(detail?.includes("ctx +1k"), detail);
+  assert.ok(!detail?.includes("msg 0"), "no bare '0' count in the preview");
+});
+
+test("delta preview: changed messages render counts, not '='", () => {
+  const store = new SessionStore();
+  const model = { id: "m", provider: "p", api: "a" };
+  const request = (content: string, timestamp: number) => {
+    store.onBeforeAgentStart({
+      prompt: "p",
+      systemPrompt: "sys",
+      systemPromptOptions: { cwd: "/x" },
+      model,
+      thinkingLevel: "high",
+      timestamp: timestamp - 1,
+    });
+    store.onAgentStart();
+    store.onContext([{ role: "user", content }], undefined, timestamp - 1);
+    store.onBeforeProviderRequest({
+      payload: { model: "m", messages: [{ role: "user", content }], tools: [] },
+      model,
+      thinkingLevel: "high",
+      contextUsage: undefined,
+      timestamp,
+    });
+  };
+  request("one", 1);
+  request("two", 2); // same slot, different content → changed
+  const list = new RequestListComponent({
+    tui: fakeTui(40),
+    theme: fakeTheme(),
+    state: store.getState(),
+    sessionId: "abc",
+    diffService: new DiffService(),
+    onSelect: () => {},
+    onClose: () => {},
+  });
+  const lines = list.render(120);
+  const idx = lines.findIndex((l) => l.startsWith("Δ"));
+  assert.ok(idx >= 0, "delta preview header rendered");
+  const detail = lines[idx + 1];
+  assert.ok(
+    detail?.includes("msg ~1"),
+    `changed messages render counts: ${detail}`,
   );
 });

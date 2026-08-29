@@ -15,11 +15,17 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { formatContextUsage, formatCount } from "../format.ts";
 import type { RequestRecord, SessionObservationState } from "../model.ts";
+import { DiffService } from "../diff/request-diff.ts";
 import type { SessionStore } from "../store.ts";
 import { RequestDetailComponent } from "./request-detail.ts";
 import { RequestListComponent } from "./request-list.ts";
 
 const STATUS_KEY = "pi-observe";
+
+export interface InspectorOptions {
+  /** P1 derived-diff service shared across inspector invocations. */
+  diffService: DiffService;
+}
 
 /** Open the inspector as a full-viewport overlay instead of inline content. */
 const FULLSCREEN_OVERLAY = {
@@ -45,13 +51,14 @@ function parseArgs(args: string): number | "latest" | undefined {
 export function registerInspectCommand(
   pi: ExtensionAPI,
   store: SessionStore,
+  options: InspectorOptions = { diffService: new DiffService() },
 ): void {
   pi.registerCommand("inspect", {
     description:
-      "Open the local request inspector: observed provider requests, prompts, context, tools, and raw payloads (no model interaction)",
+      "Open the local request inspector: observed provider requests, prompts, context, tools, raw payloads, and request diffs (no model interaction)",
     handler: async (args, ctx) => {
       try {
-        await runInspector(ctx, store, args);
+        await runInspector(ctx, store, options, args);
       } catch (error) {
         // UI failures stay local: the agent session is never affected.
         const message = error instanceof Error ? error.message : String(error);
@@ -65,6 +72,7 @@ export function registerInspectCommand(
 async function runInspector(
   ctx: ExtensionCommandContext,
   store: SessionStore,
+  options: InspectorOptions,
   args: string,
 ): Promise<void> {
   const state = store.getState();
@@ -84,12 +92,13 @@ async function runInspector(
   }
 
   const sessionId = shortSessionId(ctx);
+  const neighborFinder = neighborFinderFor(state.requests);
   setStatus(ctx, state);
   try {
     if (requested) {
-      await showDetailLoop(ctx, store, requested, sessionId);
+      await showDetailLoop(ctx, store, options, neighborFinder, requested, sessionId);
     } else {
-      await showListLoop(ctx, store, sessionId);
+      await showListLoop(ctx, store, options, neighborFinder, sessionId);
     }
   } finally {
     ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -104,10 +113,28 @@ function resolveTarget(
   return store.getRequests().find((record) => record.requestSeq === target);
 }
 
+type NeighborFinder = (record: RequestRecord, delta: -1 | 1) => RequestRecord | undefined;
+
+/**
+ * Positional [ / ] neighbor lookup. Built from the same snapshot the
+ * ledger displays: `getRequests()` would deep-clone every retained
+ * record on every keypress, and snapshot semantics keep navigation
+ * consistent with what is on screen.
+ */
+function neighborFinderFor(requests: RequestRecord[]): NeighborFinder {
+  return (record, delta) => {
+    const index = requests.findIndex((candidate) => candidate.requestSeq === record.requestSeq);
+    if (index < 0) return undefined;
+    return requests[index + delta];
+  };
+}
+
 /** Ledger loop: pick a request → detail → back → ledger → close. */
 async function showListLoop(
   ctx: ExtensionCommandContext,
   store: SessionStore,
+  options: InspectorOptions,
+  neighborFinder: NeighborFinder,
   sessionId: string | undefined,
 ): Promise<void> {
   let current: RequestRecord | null = null; // null = ledger visible
@@ -120,6 +147,7 @@ async function showListLoop(
             theme,
             state: store.getState(),
             sessionId,
+            diffService: options.diffService,
             onSelect: (record) => done({ kind: "pick", record }),
             onClose: () => done({ kind: "close" }),
           });
@@ -136,6 +164,8 @@ async function showListLoop(
             tui,
             theme,
             record: current!,
+            diffService: options.diffService,
+            getNeighborRecord: neighborFinder,
             onBack: () => done({ kind: "back" }),
             onClose: () => done({ kind: "close" }),
           });
@@ -153,6 +183,8 @@ async function showListLoop(
 async function showDetailLoop(
   ctx: ExtensionCommandContext,
   store: SessionStore,
+  options: InspectorOptions,
+  neighborFinder: NeighborFinder,
   record: RequestRecord,
   sessionId: string | undefined,
 ): Promise<void> {
@@ -162,6 +194,8 @@ async function showDetailLoop(
         tui,
         theme,
         record,
+        diffService: options.diffService,
+        getNeighborRecord: neighborFinder,
         onBack: () => done({ kind: "back" }),
         onClose: () => done({ kind: "close" }),
       });
@@ -171,7 +205,7 @@ async function showDetailLoop(
   );
   if (!result || result.kind === "close") return;
   // Back from a targeted detail falls through to the ledger.
-  return showListLoop(ctx, store, sessionId);
+  return showListLoop(ctx, store, options, neighborFinder, sessionId);
 }
 
 function summaryLine(state: SessionObservationState): string {

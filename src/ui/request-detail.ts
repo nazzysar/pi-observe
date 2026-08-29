@@ -1,21 +1,23 @@
 /**
- * P0.3 — Request detail component.
+ * P0.3/P1 — Request detail component.
  *
  * Keyboard-switchable sections for one RequestRecord:
- * OVERVIEW | SYSTEM | CONTEXT | TOOLS | RAW.
+ * OVERVIEW | DIFF | SYSTEM | CONTEXT | TOOLS | RAW.
  *
  * - OVERVIEW: metadata + observation/correlation/parser warnings
+ * - DIFF:     P1 diff against the predecessor request (sub-tabbed)
  * - SYSTEM:   effective system prompt + structured systemPromptOptions
  * - CONTEXT:  logical model-facing messages (expandable)
  * - TOOLS:    P0.2 provider tool extraction (expandable raw), with an
  *             explicit "cannot interpret → see RAW" state
  * - RAW:      sanitized provider payload observed by the extension
  *
+ * P1 adds [ / ] request navigation and `d` to jump to the DIFF tab.
  * Every section degrades to a clear unknown/error state; rendering is
  * defensive so malformed records can never crash the inspector.
  */
 
-import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import {
   collapseWhitespace,
   formatContextUsage,
@@ -23,18 +25,23 @@ import {
   formatThinkingLevel,
   formatTimestamp,
   formatWarning,
+  messageFullText,
   providerShapeLabel,
   safePrettyJson,
   summarizeMessage,
 } from "../format.ts";
 import type { RequestRecord } from "../model.ts";
+import { DiffService } from "../diff/request-diff.ts";
+import { DiffViewComponent } from "./diff-view.ts";
 import { createJsonViewer } from "./json-viewer.ts";
+import { ItemListView, type ItemViewEntry } from "./item-list.ts";
 import { TextViewer, type InspectorTheme, type ViewerTui } from "./text-viewer.ts";
 
-export type DetailSectionId = "OVERVIEW" | "SYSTEM" | "CONTEXT" | "TOOLS" | "RAW";
+export type DetailSectionId = "OVERVIEW" | "DIFF" | "SYSTEM" | "CONTEXT" | "TOOLS" | "RAW";
 
 const SECTION_IDS: DetailSectionId[] = [
   "OVERVIEW",
+  "DIFF",
   "SYSTEM",
   "CONTEXT",
   "TOOLS",
@@ -55,319 +62,38 @@ export interface RequestDetailOptions {
   tui: ViewerTui;
   theme: InspectorTheme;
   record: RequestRecord;
+  /** P1 diff service; the DIFF tab renders a clear empty state without it. */
+  diffService?: DiffService;
+  /**
+   * Neighbor lookup for [ (previous, older) / ] (next, newer) request
+   * navigation. Without it those keys are inert.
+   */
+  getNeighborRecord?: (record: RequestRecord, delta: -1 | 1) => RequestRecord | undefined;
   /** Called on Esc/q (back to the ledger). */
   onBack?: () => void;
   /** Called when the inspector should close entirely. */
   onClose?: () => void;
 }
 
-/** One selectable/expandable entry in CONTEXT / TOOLS. */
-export interface ItemViewEntry {
-  summary: string;
-  /** Full content shown below the summary when expanded. */
-  details: string;
-}
-
-/** List-like view with a cursor and per-entry expansion. */
-class ItemListView {
-  private readonly tui: ViewerTui;
-  private readonly theme: InspectorTheme;
-  private readonly title: string | undefined;
-  private readonly caption: string | undefined;
-  private readonly entries: ItemViewEntry[];
-  private readonly emptyMessage: string;
-  private readonly footer: string;
-  private readonly onClose: (() => void) | undefined;
-  /** Parent-imposed live cap on content rows (keeps the tabs visible). */
-  private readonly maxContentRows: (() => number) | undefined;
-  private readonly expanded = new Set<number>();
-  private cursor = 0;
-  private offset = 0;
-  private cachedWidth = -1;
-  /** Content rows at cache time; rendered lines also depend on terminal height. */
-  private cachedRows = -1;
-  private cachedLines: string[] | undefined;
-  /** Detail wrap width of the last render; -1 before first render. */
-  private wrapWidth = -1;
-  /** Expanded detail lines wrapped at `wrapWidth`, keyed by entry index. */
-  private wrappedDetails: Map<number, string[]> | undefined;
-
-  constructor(options: {
-    tui: ViewerTui;
-    theme: InspectorTheme;
-    title?: string;
-    caption?: string;
-    entries: ItemViewEntry[];
-    emptyMessage: string;
-    footer: string;
-    onClose?: () => void;
-    /** Parent-imposed live cap on content rows. */
-    maxContentRows?: () => number;
-  }) {
-    this.tui = options.tui;
-    this.theme = options.theme;
-    this.title = options.title;
-    this.caption = options.caption;
-    this.entries = options.entries;
-    this.emptyMessage = options.emptyMessage;
-    this.footer = options.footer;
-    this.maxContentRows = options.maxContentRows;
-    this.onClose = options.onClose;
-  }
-
-  private contentRows(): number {
-    const estimated = Math.floor(this.tui.terminal.rows) - 7;
-    const cap = this.maxContentRows?.();
-    return Math.max(4, Math.min(cap ?? estimated, estimated));
-  }
-
-  /** Number of rows entry `index` occupies (1 summary + expanded details). */
-  private entryRowCount(index: number): number {
-    return 1 + (this.expanded.has(index) ? this.detailLines(index).length : 0);
-  }
-
-  /** Detail lines for entry `index`, wrapped at the last render width. */
-  private detailLines(index: number): string[] {
-    if (this.wrappedDetails) {
-      const wrapped = this.wrappedDetails.get(index);
-      if (wrapped) return wrapped;
-    }
-    return this.entries[index]!.details.split("\n");
-  }
-
-  /** Row where entry `index` starts. */
-  private rowOf(index: number): number {
-    let row = 0;
-    for (let i = 0; i < index; i++) row += this.entryRowCount(i);
-    return row;
-  }
-
-  private totalRows(): number {
-    let rows = 0;
-    for (let i = 0; i < this.entries.length; i++) rows += this.entryRowCount(i);
-    return rows;
-  }
-
-  private entryAtRow(row: number): number {
-    let start = 0;
-    for (let i = 0; i < this.entries.length; i++) {
-      const end = start + this.entryRowCount(i);
-      if (row < end) return i;
-      start = end;
-    }
-    return Math.max(0, this.entries.length - 1);
-  }
-
-  /** True when the cursor entry's summary has scrolled above the viewport. */
-  private pinActive(): boolean {
-    return this.entries.length > 0 && this.rowOf(this.cursor) < this.offset;
-  }
-
-  /**
-   * Rows available for the scroll window. When the cursor entry's
-   * summary is pinned above the window, it consumes one row, so the
-   * window shrinks by one to keep the total rendered height stable.
-   */
-  private windowRows(): number {
-    return Math.max(1, this.contentRows() - (this.pinActive() ? 1 : 0));
-  }
-
-  /** Single-line summary for entry `index` (defensive: never a raw newline). */
-  private summaryOf(index: number): string {
-    return collapseWhitespace(this.entries[index]!.summary);
-  }
-
-  private clamp(): void {
-    const count = this.entries.length;
-    if (count === 0) {
-      this.cursor = 0;
-      this.offset = 0;
-      return;
-    }
-    if (this.cursor >= count) this.cursor = count - 1;
-    if (this.cursor < 0) this.cursor = 0;
-    const rows = this.contentRows();
-    const cursorRow = this.rowOf(this.cursor);
-    const cursorRows = this.entryRowCount(this.cursor);
-    if (cursorRows > rows) {
-      // Cursor entry is taller than the viewport: keep the offset inside
-      // the entry so sub-entry scroll positions (PageUp/PageDown/End)
-      // survive the clamp instead of snapping back to the summary.
-      if (this.offset < cursorRow) this.offset = cursorRow;
-      const tailOffset = cursorRow + cursorRows - this.windowRows();
-      if (this.offset > tailOffset) this.offset = tailOffset;
-    } else {
-      // Cursor entry fits the viewport: reveal it fully.
-      if (cursorRow < this.offset) this.offset = cursorRow;
-      const cursorEnd = cursorRow + cursorRows;
-      if (cursorEnd > this.offset + this.windowRows()) {
-        this.offset = cursorEnd - this.windowRows();
-      }
-    }
-    const maxOffset = Math.max(0, this.totalRows() - this.windowRows());
-    if (this.offset > maxOffset) this.offset = maxOffset;
-    if (this.offset < 0) this.offset = 0;
-  }
-
-  handleInput(data: string): void {
-    const rows = this.windowRows();
-    if (matchesKey(data, Key.up)) {
-      if (this.cursor > 0) this.cursor -= 1;
-    } else if (matchesKey(data, Key.down)) {
-      if (this.cursor < this.entries.length - 1) this.cursor += 1;
-    } else if (matchesKey(data, Key.pageUp)) {
-      this.offset = Math.max(0, this.offset - rows);
-      this.cursor = this.entryAtRow(this.offset);
-    } else if (matchesKey(data, Key.pageDown)) {
-      const target = Math.min(this.totalRows() - rows, this.offset + rows);
-      this.offset = Math.max(0, target);
-      this.cursor = this.entryAtRow(this.offset);
-    } else if (matchesKey(data, Key.home)) {
-      this.cursor = 0;
-      this.offset = 0;
-    } else if (matchesKey(data, Key.end)) {
-      this.cursor = Math.max(0, this.entries.length - 1);
-      // Jump straight to the last row instead of relying on the clamp,
-      // which (correctly) preserves sub-entry offsets for tall entries.
-      // When the cursor summary is pinned the window is one row shorter,
-      // so the max offset is one higher; the clamp then normalizes the
-      // collapsed-entry case back down.
-      this.offset = Math.max(0, this.totalRows() - this.contentRows() + 1);
-    } else if (matchesKey(data, Key.enter)) {
-      if (this.entries.length > 0) {
-        if (this.expanded.has(this.cursor)) this.expanded.delete(this.cursor);
-        else this.expanded.add(this.cursor);
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    } else if (matchesKey(data, Key.escape) || data === "q") {
-      this.onClose?.();
-      return;
-    } else {
-      return;
-    }
-    this.clamp();
-    this.invalidate();
-    this.tui.requestRender();
-  }
-
-  render(width: number): string[] {
-    if (
-      this.cachedLines &&
-      this.cachedWidth === width &&
-      this.cachedRows === this.contentRows()
-    ) {
-      return this.cachedLines;
-    }
-    const safeWidth = Math.max(1, Math.floor(width));
-    const indent = safeWidth >= 2 ? "  " : "";
-    // Re-wrap expanded detail lines at the current width so long JSON/text
-    // stays fully inspectable (wrapped, never truncated). Row accounting
-    // (entryRowCount/clamp) uses the same wrapped lines.
-    if (this.wrapWidth !== safeWidth) {
-      const wrapAt = Math.max(1, safeWidth - indent.length);
-      const map = new Map<number, string[]>();
-      for (let i = 0; i < this.entries.length; i++) {
-        const details: string[] = [];
-        for (const raw of this.entries[i]!.details.split("\n")) {
-          details.push(...wrapTextWithAnsi(raw, wrapAt));
-        }
-        map.set(i, details);
-      }
-      this.wrappedDetails = map;
-      this.wrapWidth = safeWidth;
-    }
-    const theme = this.theme;
-    const out: string[] = [];
-    if (this.title !== undefined) {
-      out.push(truncateToWidth(theme.fg("accent", theme.bold(this.title)), safeWidth));
-    }
-    if (this.caption !== undefined) {
-      out.push(truncateToWidth(theme.fg("dim", this.caption), safeWidth));
-    }
-    this.clamp();
-    const rows = this.windowRows();
-    const pinned = this.pinActive();
-    if (this.entries.length === 0) {
-      out.push(truncateToWidth(theme.fg("dim", this.emptyMessage), safeWidth));
-    } else {
-      if (pinned) {
-        // The cursor entry's summary scrolled above the viewport: pin it
-        // at the top of the window so the current section stays
-        // identifiable no matter how deep the detail is scrolled.
-        out.push(
-          theme.bg(
-            "selectedBg",
-            truncateToWidth(this.summaryOf(this.cursor), safeWidth),
-          ),
-        );
-      }
-      // Render rows [`offset`, `offset + rows`), walking entries. An entry
-      // whose summary lies above the viewport is cut into: only its detail
-      // lines from the cut row are shown, never the summary again.
-      let rendered = 0;
-      let row = 0;
-      for (let i = 0; i < this.entries.length && rendered < rows; i++) {
-        const start = row;
-        const end = row + this.entryRowCount(i);
-        if (end > this.offset && start < this.offset + rows) {
-          const visibleStart = Math.max(start, this.offset);
-          const selected = i === this.cursor;
-          if (visibleStart === start) {
-            const line = truncateToWidth(this.summaryOf(i), safeWidth);
-            out.push(selected ? theme.bg("selectedBg", line) : line);
-            rendered += 1;
-          }
-          if (this.expanded.has(i)) {
-            const details = this.detailLines(i);
-            // First visible row inside this entry, counting from the summary.
-            const cut = visibleStart - start - 1;
-            for (
-              let d = Math.max(0, cut);
-              d < details.length && rendered < rows;
-              d++
-            ) {
-              out.push(indent + details[d]);
-              rendered += 1;
-            }
-          }
-        }
-        row = end;
-      }
-    }
-    out.push(
-      theme.fg(
-        "dim",
-        truncateToWidth(this.footer, safeWidth),
-      ),
-    );
-    this.cachedWidth = width;
-    this.cachedRows = this.contentRows();
-    this.cachedLines = out;
-    return out;
-  }
-
-  invalidate(): void {
-    this.cachedWidth = -1;
-    this.cachedRows = -1;
-    this.cachedLines = undefined;
-  }
-}
-
 export class RequestDetailComponent {
   private readonly tui: ViewerTui;
   private readonly theme: InspectorTheme;
-  private readonly record: RequestRecord;
+  private record: RequestRecord;
+  private readonly diffService: DiffService | undefined;
+  private readonly getNeighborRecord:
+    | ((record: RequestRecord, delta: -1 | 1) => RequestRecord | undefined)
+    | undefined;
   private readonly onBack: (() => void) | undefined;
   private readonly onClose: (() => void) | undefined;
   private sectionIndex = 0;
-  private readonly views: (TextViewer | ItemListView)[] = [];
+  private views: (TextViewer | ItemListView | DiffViewComponent)[] = [];
 
   constructor(options: RequestDetailOptions) {
     this.tui = options.tui;
     this.theme = options.theme;
     this.record = options.record;
+    this.diffService = options.diffService;
+    this.getNeighborRecord = options.getNeighborRecord;
     this.onBack = options.onBack;
     this.onClose = options.onClose;
   }
@@ -376,7 +102,7 @@ export class RequestDetailComponent {
     return SECTION_IDS[this.sectionIndex]!;
   }
 
-  private currentView(): TextViewer | ItemListView {
+  private currentView(): TextViewer | ItemListView | DiffViewComponent {
     let view = this.views[this.sectionIndex];
     if (!view) {
       view = this.buildSection(this.sectionIndex);
@@ -402,11 +128,29 @@ export class RequestDetailComponent {
       this.switchSection(1);
       return;
     }
-    if (data.length === 1 && data >= "1" && data <= "5") {
+    if (data.length === 1 && data >= "1" && data <= "6") {
       this.switchToSection(Number(data) - 1);
       return;
     }
+    if (data === "[" || data === "]") {
+      this.switchRecord(data === "[" ? -1 : 1);
+      return;
+    }
+    if (data === "d") {
+      this.switchToSection(SECTION_IDS.indexOf("DIFF"));
+      return;
+    }
     this.currentView().handleInput(data);
+  }
+
+  /** [ / ]: show the previous (older) or next (newer) request. */
+  private switchRecord(delta: -1 | 1): void {
+    const next = this.getNeighborRecord?.(this.record, delta);
+    if (!next) return;
+    this.record = next;
+    this.views = []; // rebuild all sections for the new record
+    this.invalidate();
+    this.tui.requestRender();
   }
 
   private switchToSection(index: number): void {
@@ -474,7 +218,7 @@ export class RequestDetailComponent {
     );
   }
 
-  private buildSection(index: number): TextViewer | ItemListView {
+  private buildSection(index: number): TextViewer | ItemListView | DiffViewComponent {
     const theme = this.theme;
     const record = this.record;
     const back = (): void => this.onBack?.();
@@ -490,6 +234,8 @@ export class RequestDetailComponent {
           maxContentRows: () => this.viewContentBudget(),
           onClose: back,
         });
+      case "DIFF":
+        return this.buildDiffView();
       case "SYSTEM":
         return new TextViewer({
           tui: this.tui,
@@ -570,6 +316,48 @@ export class RequestDetailComponent {
     }
   }
 
+  /** DIFF tab: diff against the predecessor request (P1). */
+  private buildDiffView(): DiffViewComponent | TextViewer {
+    const theme = this.theme;
+    const back = (): void => this.onBack?.();
+    const from = this.getNeighborRecord?.(this.record, -1);
+    if (!from) {
+      return new TextViewer({
+        tui: this.tui,
+        theme,
+        title: "Request diff",
+        lines: [
+          this.diffService
+            ? "(no previous request to diff against)"
+            : "(no previous request to diff against, and no diff service wired)",
+        ],
+        footer: SECTION_FOOTER,
+        maxContentRows: () => this.viewContentBudget(),
+        onClose: back,
+      });
+    }
+    if (!this.diffService) {
+      return new TextViewer({
+        tui: this.tui,
+        theme,
+        title: "Request diff",
+        lines: ["(diff service unavailable)"],
+        footer: SECTION_FOOTER,
+        maxContentRows: () => this.viewContentBudget(),
+        onClose: back,
+      });
+    }
+    const diff = this.diffService.diff(from, this.record);
+    return new DiffViewComponent({
+      tui: this.tui,
+      theme,
+      diff,
+      fromRecord: from,
+      toRecord: this.record,
+      onClose: back,
+    });
+  }
+
   private overviewLines(): string[] {
     const theme = this.theme;
     const record = this.record;
@@ -639,29 +427,4 @@ export class RequestDetailComponent {
     // undefined for empty slots, so guard each entry.
     for (const view of this.views) view?.invalidate();
   }
-}
-
-/** Full text of a logical message: text extraction, else pretty JSON. */
-function messageFullText(message: unknown): string {
-  if (typeof message === "string") return message;
-  if (message === null || typeof message !== "object") {
-    return safePrettyJson(message);
-  }
-  const record = message as Record<string, unknown>;
-  const content = record.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const block of content) {
-      if (block !== null && typeof block === "object") {
-        const b = block as Record<string, unknown>;
-        if (typeof b.text === "string") parts.push(b.text);
-        else parts.push(safePrettyJson(b));
-      } else {
-        parts.push(safePrettyJson(block));
-      }
-    }
-    if (parts.length > 0) return parts.join("\n");
-  }
-  return safePrettyJson(message);
 }

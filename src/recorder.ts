@@ -24,15 +24,24 @@ export interface RecorderOptions {
   store: SessionStore;
   /** Clock hook for deterministic tests. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Called on session reset, right after store.reset(). Derived views
+   * keyed by request sequence (e.g. DiffService, whose cache reuses seq
+   * numbers 1, 2, 3… after a reset) must drop cached state here or a
+   * new session would be served the previous session's diffs.
+   */
+  onReset?: () => void;
 }
 
 export class Recorder {
   private readonly store: SessionStore;
   private readonly now: () => number;
+  private readonly onReset: (() => void) | undefined;
 
   constructor(options: RecorderOptions) {
     this.store = options.store;
     this.now = options.now ?? Date.now;
+    this.onReset = options.onReset;
   }
 
   /** before_agent_start: allocate run id, snapshot prompt/model/thinking. */
@@ -106,7 +115,11 @@ export class Recorder {
 
   /** session_start: full reset (new session, new history). */
   sessionStart(event: SessionStartEvent, _ctx: ExtensionContext): void {
-    if (event.reason !== "startup") this.store.reset();
+    if (event.reason === "startup") return;
+    this.store.reset();
+    // The request sequence restarts at 1; let seq-keyed derived views
+    // (DiffService) drop anything computed from the previous session.
+    this.onReset?.();
   }
 }
 
